@@ -125,6 +125,7 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json" }, ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  if (res.status === 401) { location.href = "/login"; throw new Error("로그인이 필요합니다."); }
   if (!res.ok) {
     const detail = await res.json().then(j => j.detail).catch(() => res.statusText);
     throw new Error(detail);

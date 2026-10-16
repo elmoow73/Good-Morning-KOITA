@@ -11,13 +11,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
+import auth  # noqa: E402
 import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
 import exporter  # noqa: E402
@@ -28,6 +29,17 @@ MIN_COLLECT_INTERVAL = timedelta(minutes=10)
 app = FastAPI(title="굿모닝 뉴스 수집기")
 collect_lock = threading.Lock()
 db.init_db()
+app.middleware("http")(auth.require_login)
+
+
+@app.get("/login")
+def login_form():
+    return auth.login_page()
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    return await auth.login(request)
 
 
 @app.get("/")
