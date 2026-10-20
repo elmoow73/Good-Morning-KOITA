@@ -22,6 +22,7 @@ import auth  # noqa: E402
 import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
 import exporter  # noqa: E402
+import notion  # noqa: E402
 
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
 MIN_COLLECT_INTERVAL = timedelta(minutes=10)
@@ -120,15 +121,40 @@ def run_collect(
             keywords, since, until, known_keys=db.known_article_keys()
         )
         new_count = db.save_articles(new_articles, keyword_hits)
+        # 이번 기간에 아직 노션에 없는 기사(지난번에 실패한 것 포함)를 노션으로 보낸다
+        notion_count, notion_errors = push_to_notion(since, until)
+        errors = errors + notion_errors
         db.finish_run(run_id, new_count, errors)
-        return {"skipped": False, "new_count": new_count, "errors": errors, "last_run": db.last_run()}
+        return {
+            "skipped": False, "new_count": new_count, "notion_count": notion_count,
+            "errors": errors, "last_run": db.last_run(),
+        }
     finally:
         collect_lock.release()
 
 
 @app.get("/api/status")
 def status():
-    return {"last_run": db.last_run()}
+    return {"last_run": db.last_run(), "notion": notion.enabled()}
+
+
+# ---------------- 노션 ----------------
+
+def push_to_notion(since, until):
+    as_text = lambda d: d.isoformat(timespec="seconds") if d else None
+    articles = db.list_articles(as_text(since), as_text(until), notion_missing=True)
+    created, errors = notion.push_articles(articles)
+    db.set_notion_page_ids(created)
+    return len(created), errors
+
+
+@app.post("/api/notion/sync")
+def notion_sync(hours: int = 24, date_from: str | None = None, date_to: str | None = None):
+    if not notion.enabled():
+        raise HTTPException(400, ".env 파일에 NOTION_TOKEN / NOTION_DATABASE_ID가 없습니다.")
+    since, until = period_datetimes(hours, date_from, date_to)
+    count, errors = push_to_notion(since, until)
+    return {"notion_count": count, "errors": errors}
 
 
 # ---------------- 기사 ----------------
@@ -173,12 +199,23 @@ class ArticlePatch(BaseModel):
 @app.patch("/api/articles/{article_id}")
 def patch_article(article_id: int, body: ArticlePatch):
     db.update_article(article_id, body.press, body.print_page, body.has_video)
+    article = db.get_article(article_id)
+    try:
+        notion.update_article(article and article["notion_page_id"], article)
+    except (notion.NotionError, notion.requests.RequestException) as e:
+        return {"ok": True, "warning": f"DB에는 저장했지만 노션은 고치지 못했습니다. {e}"}
     return {"ok": True}
 
 
 @app.delete("/api/articles/{article_id}")
 def remove_article(article_id: int):
+    article = db.get_article(article_id)
     db.delete_article(article_id)
+    try:
+        # 노션에서는 휴지통으로 옮긴다 (노션 휴지통에서 되살릴 수 있음)
+        notion.archive_article(article and article["notion_page_id"])
+    except (notion.NotionError, notion.requests.RequestException) as e:
+        return {"ok": True, "warning": f"DB에서는 지웠지만 노션에서는 지우지 못했습니다. {e}"}
     return {"ok": True}
 
 

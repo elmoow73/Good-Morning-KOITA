@@ -63,7 +63,7 @@
 </head>
 <body>
 <header>
-  <h1>☀️ 굿모닝 뉴스 <small style="font-size:12px; color:var(--muted); font-weight:400">v0.3</small></h1>
+  <h1>☀️ 굿모닝 뉴스 <small style="font-size:12px; color:var(--muted); font-weight:400">v1.1.0</small></h1>
   <span id="status">불러오는 중…</span>
   <div class="row">
     <select id="search-period" title="검색 기간">
@@ -78,6 +78,7 @@
     <button id="btn-collect" class="primary">지금 다시 검색</button>
   </div>
   <button id="btn-export">엑셀 다운로드</button>
+  <button id="btn-notion" style="display:none" title="보고 있는 기간에서 아직 노션에 없는 기사를 노션 데이터베이스로 보냅니다">노션으로 보내기</button>
 </header>
 
 <main>
@@ -166,6 +167,12 @@ function showStatus(run) {
   $("status").textContent = `마지막 검색: ${fmtTime(run.finished_at)} · 새 기사 ${run.new_count}건`;
 }
 
+// DB에는 반영됐지만 노션 반영이 실패했을 때 알려준다
+function warn(result) {
+  if (result && result.warning) alert(result.warning);
+  return result;
+}
+
 function showErrors(errors) {
   $("errors").innerHTML = errors && errors.length
     ? `<div class="error">${esc(errors.join("\n"))}</div>` : "";
@@ -245,27 +252,27 @@ $("articles").addEventListener("click", async (e) => {
       const a = find(t.dataset.press);
       const value = prompt("언론사명", a.press);
       if (value === null) return;
-      await api(`/api/articles/${a.id}`, { method: "PATCH", body: { press: value.trim() } });
+      warn(await api(`/api/articles/${a.id}`, { method: "PATCH", body: { press: value.trim() } }));
       a.press = value.trim();
     } else if (t.dataset.print) {
       const a = find(t.dataset.print);
       const value = prompt("지면 (예: A12면). 비우면 온라인", a.print_page === "온라인" ? "" : a.print_page);
       if (value === null) return;
       const page = value.trim() || "온라인";
-      await api(`/api/articles/${a.id}`, { method: "PATCH", body: { print_page: page } });
+      warn(await api(`/api/articles/${a.id}`, { method: "PATCH", body: { print_page: page } }));
       a.print_page = page;
       if (page === "온라인" && !a.has_video && confirm("영상 기사로 표시할까요?")) {
-        await api(`/api/articles/${a.id}`, { method: "PATCH", body: { has_video: true } });
+        warn(await api(`/api/articles/${a.id}`, { method: "PATCH", body: { has_video: true } }));
         a.has_video = true;
       }
     } else if (t.dataset.video) {
       const a = find(t.dataset.video);
       if (!confirm("영상 표시를 해제할까요?")) return;
-      await api(`/api/articles/${a.id}`, { method: "PATCH", body: { has_video: false } });
+      warn(await api(`/api/articles/${a.id}`, { method: "PATCH", body: { has_video: false } }));
       a.has_video = false;
     } else if (t.dataset.del) {
       if (!confirm("이 기사를 삭제할까요? 다음 검색 때 다시 수집될 수 있습니다.")) return;
-      await api(`/api/articles/${t.dataset.del}`, { method: "DELETE" });
+      warn(await api(`/api/articles/${t.dataset.del}`, { method: "DELETE" }));
       articles = articles.filter(a => a.id !== Number(t.dataset.del));
     } else return;
     renderArticles();
@@ -288,6 +295,7 @@ async function collect(force) {
     const result = await api(`/api/collect?force=${force}&${periodQuery("search")}`, { method: "POST" });
     syncListPeriod();
     showStatus(result.last_run);
+    if (result.notion_count) $("status").textContent += ` · 노션 ${result.notion_count}건 추가`;
     showErrors(result.errors);
   } catch (err) {
     showErrors([err.message]);
@@ -300,6 +308,19 @@ async function collect(force) {
 
 $("btn-collect").addEventListener("click", () => collect(true));
 $("btn-export").addEventListener("click", () => { location.href = `/api/export?${periodQuery()}`; });
+$("btn-notion").addEventListener("click", async () => {
+  const btn = $("btn-notion");
+  btn.disabled = true;
+  try {
+    const result = await api(`/api/notion/sync?${periodQuery()}`, { method: "POST" });
+    showErrors(result.errors);
+    alert(result.notion_count ? `노션에 ${result.notion_count}건을 추가했습니다.` : "새로 보낼 기사가 없습니다.");
+  } catch (err) {
+    showErrors([err.message]);
+  } finally {
+    btn.disabled = false;
+  }
+});
 $("search-period").addEventListener("change", () => {
   const isRange = $("search-period").value === "range";
   $("search-range").style.display = isRange ? "" : "none";
@@ -320,6 +341,7 @@ $("filter").addEventListener("input", renderArticles);
 // 첫 화면: 키워드를 보여주고, 바로 최근 24시간 기사를 검색
 (async () => {
   renderKeywords(await api("/api/keywords"));
+  if ((await api("/api/status")).notion) $("btn-notion").style.display = "";
   await collect(false);
 })();
 </script>

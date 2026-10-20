@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+# 예전 버전에서 만든 news.db에 나중에 생긴 열을 덧붙인다
+MIGRATIONS = {
+    ("articles", "notion_page_id"): "ALTER TABLE articles ADD COLUMN notion_page_id TEXT",
+}
+
 
 def now_iso():
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -67,6 +72,10 @@ def connect():
 def init_db():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        for (table, column), sql in MIGRATIONS.items():
+            columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                conn.execute(sql)
         if conn.execute("SELECT COUNT(*) FROM keywords").fetchone()[0] == 0:
             conn.executemany(
                 "INSERT INTO keywords (keyword, created_at) VALUES (?, ?)",
@@ -136,13 +145,18 @@ def save_articles(new_articles, keyword_hits):
     return len(new_articles)
 
 
-def list_articles(since_iso=None, until_iso=None):
+def list_articles(since_iso=None, until_iso=None, article_id=None, notion_missing=False):
     query = """
         SELECT a.*, GROUP_CONCAT(k.keyword, ', ') AS keywords
         FROM articles a LEFT JOIN article_keywords k ON k.article_id = a.id
         WHERE 1 = 1
     """
     params = []
+    if article_id is not None:
+        query += " AND a.id = ?"
+        params.append(article_id)
+    if notion_missing:
+        query += " AND a.notion_page_id IS NULL"
     if since_iso:
         query += " AND a.published_at >= ?"
         params.append(since_iso)
@@ -167,6 +181,17 @@ def update_article(article_id, press=None, print_page=None, has_video=None):
             conn.execute("UPDATE articles SET print_page = ? WHERE id = ?", (print_page or "온라인", article_id))
         if has_video is not None:
             conn.execute("UPDATE articles SET has_video = ? WHERE id = ?", (1 if has_video else 0, article_id))
+
+
+def get_article(article_id):
+    rows = list_articles(article_id=article_id)
+    return rows[0] if rows else None
+
+
+def set_notion_page_ids(pairs):
+    """[(기사 id, 노션 페이지 id)]를 기록해 같은 기사를 노션에 두 번 보내지 않게 한다."""
+    with connect() as conn:
+        conn.executemany("UPDATE articles SET notion_page_id = ? WHERE id = ?", [(p, a) for a, p in pairs])
 
 
 def delete_article(article_id):
