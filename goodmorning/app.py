@@ -200,11 +200,17 @@ class ArticlePatch(BaseModel):
 def patch_article(article_id: int, body: ArticlePatch):
     db.update_article(article_id, body.press, body.print_page, body.has_video)
     article = db.get_article(article_id)
+    if not (article and article["notion_page_id"]):
+        return {"ok": True}
     try:
-        notion.update_article(article and article["notion_page_id"], article)
+        page_ids = notion.replace_article(article["notion_page_id"], article)
     except (notion.NotionError, notion.requests.RequestException) as e:
-        return {"ok": True, "warning": f"DB에는 저장했지만 노션은 고치지 못했습니다. {e}"}
-    return {"ok": True}
+        page_ids = None
+        warning = f"DB에는 저장했지만 노션은 고치지 못했습니다. \"노션으로 보내기\"로 다시 올릴 수 있습니다. {e}"
+    else:
+        warning = None
+    db.set_notion_page_ids([(article_id, page_ids)])
+    return {"ok": True, "warning": warning}
 
 
 @app.delete("/api/articles/{article_id}")

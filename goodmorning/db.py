@@ -189,7 +189,7 @@ def get_article(article_id):
 
 
 def set_notion_page_ids(pairs):
-    """[(기사 id, 노션 페이지 id)]를 기록해 같은 기사를 노션에 두 번 보내지 않게 한다."""
+    """[(기사 id, 노션 페이지 id들)]를 기록해 같은 기사를 노션에 두 번 보내지 않게 한다. None이면 다시 보낼 대상이 된다."""
     with connect() as conn:
         conn.executemany("UPDATE articles SET notion_page_id = ? WHERE id = ?", [(p, a) for a, p in pairs])
 
