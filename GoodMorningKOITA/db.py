@@ -7,7 +7,13 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).with_name("news.db")
 
-DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
+# 기본 키워드. 하나라도 들어간 기사를 모두 모은다(OR). 따옴표는 정확히 일치하는 기사 위주로 검색
+DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협회"', '"산기협"', '"장영실상"', '"엔지니어상"']
+# v1.0.0의 기본 키워드. 업그레이드할 때 새 기본 키워드로 바꾼다
+OLD_DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
+
+# PRAGMA user_version으로 기록하는 DB 구조 버전
+SCHEMA_VERSION = 1
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keywords (
@@ -67,11 +73,14 @@ def connect():
 def init_db():
     with connect() as conn:
         conn.executescript(SCHEMA)
-        if conn.execute("SELECT COUNT(*) FROM keywords").fetchone()[0] == 0:
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            # v1.0.0 → v1.1.0: 예전 기본 키워드만 새 기본 키워드 5개로 바꾸고, 직접 추가한 키워드는 그대로 둔다
+            conn.executemany("DELETE FROM keywords WHERE keyword = ?", [(k,) for k in OLD_DEFAULT_KEYWORDS])
             conn.executemany(
-                "INSERT INTO keywords (keyword, created_at) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO keywords (keyword, created_at) VALUES (?, ?)",
                 [(k, now_iso()) for k in DEFAULT_KEYWORDS],
             )
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 # ---------------- 키워드 ----------------
@@ -156,6 +165,12 @@ def list_articles(since_iso=None, until_iso=None):
         row["has_video"] = bool(row["has_video"])
         row["url"] = row["original_link"] or row["naver_link"]
     return rows
+
+
+def articles_by_ids(ids):
+    """화면에서 체크한 기사만 (list_articles와 같은 형태로)"""
+    wanted = set(ids)
+    return [a for a in list_articles() if a["id"] in wanted]
 
 
 def update_article(article_id, press=None, print_page=None, has_video=None):

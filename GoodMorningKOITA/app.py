@@ -1,5 +1,5 @@
 """
-굿모닝 뉴스 수집기 웹 서버
+GoodMorningKOITA 웹 서버
 
 실행: python app.py  →  브라우저에서 http://127.0.0.1:8000
 """
@@ -18,6 +18,7 @@ from pydantic import BaseModel
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
+import archive  # noqa: E402
 import auth  # noqa: E402
 import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
@@ -26,8 +27,11 @@ import exporter  # noqa: E402
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
 MIN_COLLECT_INTERVAL = timedelta(minutes=10)
 
-app = FastAPI(title="굿모닝 뉴스 수집기")
+VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
+
+app = FastAPI(title="GoodMorningKOITA", version=VERSION)
 collect_lock = threading.Lock()
+archive_lock = threading.Lock()
 db.init_db()
 app.middleware("http")(auth.require_login)
 
@@ -128,7 +132,7 @@ def run_collect(
 
 @app.get("/api/status")
 def status():
-    return {"last_run": db.last_run()}
+    return {"last_run": db.last_run(), "version": VERSION, "archive": archive.info()}
 
 
 # ---------------- 기사 ----------------
@@ -161,7 +165,11 @@ def period(hours, date_from, date_to):
 @app.get("/api/articles")
 def get_articles(hours: int = 24, date_from: str | None = None, date_to: str | None = None):
     since, until = period(hours, date_from, date_to)
-    return db.list_articles(since, until)
+    rows = db.list_articles(since, until)
+    saved = archive.saved_urls()
+    for row in rows:
+        row["archived"] = row["url"] in saved
+    return rows
 
 
 class ArticlePatch(BaseModel):
@@ -182,10 +190,40 @@ def remove_article(article_id: int):
     return {"ok": True}
 
 
+class Selection(BaseModel):
+    ids: list[int]
+
+
+def selected_articles(body: Selection):
+    articles = db.articles_by_ids(body.ids)
+    if not articles:
+        raise HTTPException(400, "체크한 기사가 없습니다.")
+    return articles
+
+
+@app.post("/api/archive")
+def save_to_archive(body: Selection):
+    """체크한 기사를 별도 DB(database 폴더)에 이어 붙인다. 이미 있는 행은 건너뛴다."""
+    articles = selected_articles(body)
+    with archive_lock:
+        return archive.save(articles)
+
+
+@app.post("/api/export")
+def export_selected(body: Selection):
+    """체크한 기사만 엑셀로"""
+    return xlsx_response(selected_articles(body))
+
+
 @app.get("/api/export")
 def export(hours: int = 24, date_from: str | None = None, date_to: str | None = None):
+    """기간 전체를 엑셀로 (v1.0.0 방식, 주소로 바로 받을 때)"""
     since, until = period(hours, date_from, date_to)
-    content = exporter.build_workbook(db.list_articles(since, until))
+    return xlsx_response(db.list_articles(since, until))
+
+
+def xlsx_response(articles):
+    content = exporter.build_workbook(articles)
     filename = f"산기협_뉴스_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     return Response(
         content,
