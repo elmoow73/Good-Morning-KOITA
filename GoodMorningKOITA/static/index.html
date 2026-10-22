@@ -112,6 +112,14 @@
         <span id="range" class="row" style="display:none">
           <input type="date" id="date-from"> ~ <input type="date" id="date-to">
         </span>
+        <select id="press-filter" title="언론사로 골라 보기"><option value="">언론사 전체</option></select>
+        <select id="kw-filter" title="키워드로 골라 보기"><option value="">키워드 전체</option></select>
+        <select id="sort" title="정렬">
+          <option value="new">최신순</option>
+          <option value="old">오래된순</option>
+          <option value="press">언론사순</option>
+          <option value="keyword">키워드순</option>
+        </select>
         <input type="text" id="filter" placeholder="목록에서 찾기">
       </div>
     </div>
@@ -223,11 +231,44 @@ $("kw-form").addEventListener("submit", async (e) => {
 
 // ---------------- 기사 ----------------
 
+// 기사의 키워드 칸("a", "b")을 따옴표 뺀 목록으로
+function keywordsOf(a) {
+  return (a.keywords || "").split(", ").map(k => k.replaceAll('"', "").trim()).filter(Boolean);
+}
+
+// 지금 목록에 있는 언론사·키워드로 선택 목록을 만든다 (많은 순, 건수 표시)
+function fillFilterOptions() {
+  const fill = (id, allLabel, values) => {
+    const select = $(id);
+    const current = select.value;
+    const counts = new Map();
+    for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+    const items = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], "ko"));
+    select.innerHTML = `<option value="">${allLabel}</option>` +
+      items.map(([v, n]) => `<option value="${esc(v)}">${esc(v)} (${n})</option>`).join("");
+    // 고른 값이 목록에서 사라졌으면 전체로
+    select.value = counts.has(current) ? current : "";
+  };
+  fill("press-filter", "언론사 전체", articles.map(a => a.press || "?"));
+  fill("kw-filter", "키워드 전체", articles.flatMap(keywordsOf));
+}
+
 function visibleArticles() {
   const term = $("filter").value.trim().toLowerCase();
-  return term
-    ? articles.filter(a => `${a.title} ${a.press} ${a.description}`.toLowerCase().includes(term))
-    : articles;
+  const press = $("press-filter").value;
+  const keyword = $("kw-filter").value;
+  const list = articles.filter(a =>
+    (!term || `${a.title} ${a.press} ${a.description}`.toLowerCase().includes(term)) &&
+    (!press || (a.press || "?") === press) &&
+    (!keyword || keywordsOf(a).includes(keyword)));
+  const byTime = (x, y) => y.published_at.localeCompare(x.published_at);
+  const sorters = {
+    new: byTime,
+    old: (x, y) => -byTime(x, y),
+    press: (x, y) => (x.press || "").localeCompare(y.press || "", "ko") || byTime(x, y),
+    keyword: (x, y) => (keywordsOf(x)[0] || "").localeCompare(keywordsOf(y)[0] || "", "ko") || byTime(x, y),
+  };
+  return list.sort(sorters[$("sort").value]);
 }
 
 function renderSelection() {
@@ -309,6 +350,7 @@ $("articles").addEventListener("click", async (e) => {
       articles = articles.filter(a => a.id !== Number(t.dataset.del));
       checked.delete(Number(t.dataset.del));
     } else return;
+    fillFilterOptions();  // 언론사명을 고치거나 기사를 지우면 선택 목록도 바뀐다
     renderArticles();
   } catch (err) { alert(err.message); }
 });
@@ -318,6 +360,7 @@ async function loadArticles() {
   // 기간을 바꿔 목록에서 사라진 기사는 체크도 푼다
   const ids = new Set(articles.map(a => a.id));
   for (const id of [...checked]) if (!ids.has(id)) checked.delete(id);
+  fillFilterOptions();
   renderArticles();
 }
 
@@ -406,6 +449,7 @@ $("period").addEventListener("change", () => {
 $("date-from").addEventListener("change", loadArticles);
 $("date-to").addEventListener("change", loadArticles);
 $("filter").addEventListener("input", renderArticles);
+for (const id of ["press-filter", "kw-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
 // 첫 화면: 키워드를 보여주고, 바로 최근 24시간 기사를 검색
 (async () => {
