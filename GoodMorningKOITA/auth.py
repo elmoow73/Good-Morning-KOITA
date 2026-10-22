@@ -21,7 +21,7 @@ _SESSION_KEY = secrets.token_bytes(32)
 
 LOGIN_PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>굿모닝 뉴스 로그인</title>
+<title>GoodMorningKOITA 로그인</title>
 <style>
   body { margin:0; min-height:100vh; display:grid; place-items:center; background:#f6f7f9; color:#1d2330;
          font:14px/1.5 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif; }
@@ -33,7 +33,7 @@ LOGIN_PAGE = """<!doctype html>
   .error { color:#b91c1c; margin:0; }
 </style></head>
 <body><form method="post" action="/login">
-  <h1>☀️ 굿모닝 뉴스</h1>
+  <h1>☀️ GoodMorningKOITA</h1>
   {error}
   <input type="password" name="password" placeholder="비밀번호" autofocus required>
   <button type="submit">들어가기</button>

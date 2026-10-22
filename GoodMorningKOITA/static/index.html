@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>굿모닝 뉴스</title>
+<title>GoodMorningKOITA</title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
@@ -49,6 +49,11 @@
   .badge.print { background: var(--warn-soft); color: var(--warn); }
   .badge.video { background: var(--green-soft); color: var(--green); }
   .kw { font-size: 12px; color: var(--muted); }
+  .chip-or { color: var(--muted); font-size: 12px; align-self: center; }
+  .badge.saved { background: var(--accent-soft); color: var(--accent); cursor: default; }
+  th.check, td.check { width: 28px; padding-right: 0; }
+  input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
+  tr.checked td { background: #f5f8ff; }
   .del { color: var(--muted); border: 0; background: none; }
   .del:hover { color: var(--red); }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
@@ -63,7 +68,7 @@
 </head>
 <body>
 <header>
-  <h1>☀️ 굿모닝 뉴스 <small style="font-size:12px; color:var(--muted); font-weight:400">v0.3</small></h1>
+  <h1>☀️ GoodMorningKOITA <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
   <span id="status">불러오는 중…</span>
   <div class="row">
     <select id="search-period" title="검색 기간">
@@ -77,12 +82,16 @@
     </span>
     <button id="btn-collect" class="primary">지금 다시 검색</button>
   </div>
-  <button id="btn-export">엑셀 다운로드</button>
+  <div class="row">
+    <button id="btn-export" title="체크한 기사만 엑셀로 내려받기">엑셀 다운로드</button>
+    <button id="btn-archive" title="체크한 기사를 database 폴더의 DB 맨 아래에 추가 (이미 있는 기사는 건너뜀)">DB 저장</button>
+    <span class="kw" id="archive-info"></span>
+  </div>
 </header>
 
 <main>
   <section class="panel">
-    <h2>검색 키워드</h2>
+    <h2>검색 키워드 <span class="count">· 아래 키워드 중 하나라도 들어간 기사를 모두 모읍니다 (OR). 여러 키워드에 걸린 기사도 한 번만 보입니다.</span></h2>
     <div class="chips" id="keywords"></div>
     <form class="row" id="kw-form">
       <input type="text" id="kw-input" placeholder="새 키워드 (정확히 일치하려면 &quot;따옴표&quot;로 감싸기)" style="flex:1; min-width:220px">
@@ -103,12 +112,21 @@
         <span id="range" class="row" style="display:none">
           <input type="date" id="date-from"> ~ <input type="date" id="date-to">
         </span>
+        <select id="press-filter" title="언론사로 골라 보기"><option value="">언론사 전체</option></select>
+        <select id="kw-filter" title="키워드로 골라 보기"><option value="">키워드 전체</option></select>
+        <select id="sort" title="정렬">
+          <option value="new">최신순</option>
+          <option value="old">오래된순</option>
+          <option value="press">언론사순</option>
+          <option value="keyword">키워드순</option>
+        </select>
         <input type="text" id="filter" placeholder="목록에서 찾기">
       </div>
     </div>
     <div id="errors"></div>
     <table>
       <thead><tr>
+        <th class="check"><input type="checkbox" id="check-all" title="보이는 기사 모두 체크/해제"></th>
         <th>시간</th><th>언론사</th><th>구분</th><th>제목</th><th class="hide-sm">키워드</th><th></th>
       </tr></thead>
       <tbody id="articles"></tbody>
@@ -119,6 +137,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let articles = [];
+const checked = new Set();  // 체크한 기사 id
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -174,7 +193,7 @@ function showErrors(errors) {
 // ---------------- 키워드 ----------------
 
 function renderKeywords(list) {
-  $("keywords").innerHTML = list.map(k => `
+  $("keywords").innerHTML = list.map((k, i) => `${i ? `<span class="chip-or">또는</span>` : ""}
     <span class="chip ${k.enabled ? "" : "off"}">
       <span>${esc(k.keyword)}</span>
       <button title="${k.enabled ? "검색에서 빼기" : "다시 검색에 포함"}" data-toggle="${k.id}" data-enabled="${k.enabled}">${k.enabled ? "⏸" : "▶"}</button>
@@ -212,14 +231,62 @@ $("kw-form").addEventListener("submit", async (e) => {
 
 // ---------------- 기사 ----------------
 
-function renderArticles() {
+// 기사의 키워드 칸("a", "b")을 따옴표 뺀 목록으로
+function keywordsOf(a) {
+  return (a.keywords || "").split(", ").map(k => k.replaceAll('"', "").trim()).filter(Boolean);
+}
+
+// 지금 목록에 있는 언론사·키워드로 선택 목록을 만든다 (많은 순, 건수 표시)
+function fillFilterOptions() {
+  const fill = (id, allLabel, values) => {
+    const select = $(id);
+    const current = select.value;
+    const counts = new Map();
+    for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+    const items = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], "ko"));
+    select.innerHTML = `<option value="">${allLabel}</option>` +
+      items.map(([v, n]) => `<option value="${esc(v)}">${esc(v)} (${n})</option>`).join("");
+    // 고른 값이 목록에서 사라졌으면 전체로
+    select.value = counts.has(current) ? current : "";
+  };
+  fill("press-filter", "언론사 전체", articles.map(a => a.press || "?"));
+  fill("kw-filter", "키워드 전체", articles.flatMap(keywordsOf));
+}
+
+function visibleArticles() {
   const term = $("filter").value.trim().toLowerCase();
-  const list = term
-    ? articles.filter(a => `${a.title} ${a.press} ${a.description}`.toLowerCase().includes(term))
-    : articles;
-  $("count").textContent = `${list.length}건`;
+  const press = $("press-filter").value;
+  const keyword = $("kw-filter").value;
+  const list = articles.filter(a =>
+    (!term || `${a.title} ${a.press} ${a.description}`.toLowerCase().includes(term)) &&
+    (!press || (a.press || "?") === press) &&
+    (!keyword || keywordsOf(a).includes(keyword)));
+  const byTime = (x, y) => y.published_at.localeCompare(x.published_at);
+  const sorters = {
+    new: byTime,
+    old: (x, y) => -byTime(x, y),
+    press: (x, y) => (x.press || "").localeCompare(y.press || "", "ko") || byTime(x, y),
+    keyword: (x, y) => (keywordsOf(x)[0] || "").localeCompare(keywordsOf(y)[0] || "", "ko") || byTime(x, y),
+  };
+  return list.sort(sorters[$("sort").value]);
+}
+
+function renderSelection() {
+  const list = visibleArticles();
+  const n = checked.size;
+  $("btn-export").textContent = n ? `엑셀 다운로드 (${n})` : "엑셀 다운로드";
+  $("btn-archive").textContent = n ? `DB 저장 (${n})` : "DB 저장";
+  const visibleChecked = list.filter(a => checked.has(a.id)).length;
+  $("check-all").checked = list.length > 0 && visibleChecked === list.length;
+  $("check-all").indeterminate = visibleChecked > 0 && visibleChecked < list.length;
+}
+
+function renderArticles() {
+  const list = visibleArticles();
+  $("count").textContent = `${list.length}건` + (checked.size ? ` · ${checked.size}건 체크` : "");
   $("articles").innerHTML = list.map(a => `
-    <tr>
+    <tr class="${checked.has(a.id) ? "checked" : ""}">
+      <td class="check"><input type="checkbox" data-check="${a.id}" ${checked.has(a.id) ? "checked" : ""}></td>
       <td class="time">${fmtTime(a.published_at)}</td>
       <td class="press" data-press="${a.id}" title="클릭해서 언론사명 수정">${esc(a.press) || "?"}</td>
       <td>
@@ -227,6 +294,7 @@ function renderArticles() {
           ? `<span class="badge print" data-print="${a.id}" title="클릭해서 지면 수정">지면 ${esc(a.print_page)}</span>`
           : `<span class="badge online" data-print="${a.id}" title="클릭해서 지면 입력">온라인</span>`}
         ${a.has_video ? `<span class="badge video" data-video="${a.id}" title="클릭해서 영상 표시 해제">영상</span>` : ""}
+        ${a.archived ? `<span class="badge saved" title="DB에 이미 저장된 기사">저장됨</span>` : ""}
       </td>
       <td>
         <a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a>
@@ -234,8 +302,21 @@ function renderArticles() {
       </td>
       <td class="kw hide-sm">${esc(a.keywords)}</td>
       <td><button class="del" data-del="${a.id}" title="목록과 DB에서 삭제">✕</button></td>
-    </tr>`).join("") || `<tr><td colspan="6" class="empty">해당 기간의 기사가 없습니다.</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="7" class="empty">해당 기간의 기사가 없습니다.</td></tr>`;
+  renderSelection();
 }
+
+$("articles").addEventListener("change", (e) => {
+  const id = Number(e.target.dataset.check);
+  if (!id) return;
+  e.target.checked ? checked.add(id) : checked.delete(id);
+  renderArticles();
+});
+
+$("check-all").addEventListener("change", (e) => {
+  for (const a of visibleArticles()) e.target.checked ? checked.add(a.id) : checked.delete(a.id);
+  renderArticles();
+});
 
 $("articles").addEventListener("click", async (e) => {
   const t = e.target;
@@ -267,13 +348,19 @@ $("articles").addEventListener("click", async (e) => {
       if (!confirm("이 기사를 삭제할까요? 다음 검색 때 다시 수집될 수 있습니다.")) return;
       await api(`/api/articles/${t.dataset.del}`, { method: "DELETE" });
       articles = articles.filter(a => a.id !== Number(t.dataset.del));
+      checked.delete(Number(t.dataset.del));
     } else return;
+    fillFilterOptions();  // 언론사명을 고치거나 기사를 지우면 선택 목록도 바뀐다
     renderArticles();
   } catch (err) { alert(err.message); }
 });
 
 async function loadArticles() {
   articles = await api(`/api/articles?${periodQuery()}`);
+  // 기간을 바꿔 목록에서 사라진 기사는 체크도 푼다
+  const ids = new Set(articles.map(a => a.id));
+  for (const id of [...checked]) if (!ids.has(id)) checked.delete(id);
+  fillFilterOptions();
   renderArticles();
 }
 
@@ -299,7 +386,53 @@ async function collect(force) {
 }
 
 $("btn-collect").addEventListener("click", () => collect(true));
-$("btn-export").addEventListener("click", () => { location.href = `/api/export?${periodQuery()}`; });
+function checkedIds() {
+  if (!checked.size) { alert("먼저 기사 앞의 칸을 체크하세요."); return null; }
+  return [...checked];
+}
+
+function showArchiveInfo(info) {
+  $("archive-info").textContent = `DB 누적 ${info.total}행`;
+  $("archive-info").title = `저장 위치: ${info.folder}`;
+}
+
+$("btn-export").addEventListener("click", async () => {
+  const ids = checkedIds();
+  if (!ids) return;
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) throw new Error(await res.json().then(j => j.detail).catch(() => res.statusText));
+    const name = decodeURIComponent((res.headers.get("Content-Disposition") || "").split("''")[1] || "뉴스.xlsx");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await res.blob());
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  } catch (err) { alert(err.message); }
+});
+
+$("btn-archive").addEventListener("click", async () => {
+  const ids = checkedIds();
+  if (!ids) return;
+  const btn = $("btn-archive");
+  btn.disabled = true;
+  try {
+    const r = await api("/api/archive", { method: "POST", body: { ids } });
+    showArchiveInfo((await api("/api/status")).archive);
+    let message = `DB에 ${r.added}행을 추가했습니다.`;
+    if (r.skipped) message += ` (이미 있던 ${r.skipped}행은 건너뜀)`;
+    message += `\nDB 누적 ${r.total}행`;
+    if (r.warnings.length) message += `\n\n${r.warnings.join("\n")}`;
+    alert(message);
+    checked.clear();
+    await loadArticles();
+  } catch (err) { alert(err.message); }
+  finally { btn.disabled = false; }
+});
 $("search-period").addEventListener("change", () => {
   const isRange = $("search-period").value === "range";
   $("search-range").style.display = isRange ? "" : "none";
@@ -316,10 +449,14 @@ $("period").addEventListener("change", () => {
 $("date-from").addEventListener("change", loadArticles);
 $("date-to").addEventListener("change", loadArticles);
 $("filter").addEventListener("input", renderArticles);
+for (const id of ["press-filter", "kw-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
 // 첫 화면: 키워드를 보여주고, 바로 최근 24시간 기사를 검색
 (async () => {
   renderKeywords(await api("/api/keywords"));
+  const info = await api("/api/status");
+  $("version").textContent = `v${info.version}`;
+  showArchiveInfo(info.archive);
   await collect(false);
 })();
 </script>

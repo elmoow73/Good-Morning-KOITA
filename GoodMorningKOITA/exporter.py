@@ -17,6 +17,18 @@ COLUMNS = ["연번", "날짜", "언론사명", "구분", "제목", "URL"]
 WIDTHS = [8, 15, 20, 12, 70, 70]
 
 
+def row_key(r):
+    """같은 행인지 가리는 키. 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)"""
+    if r["구분"] in ("온라인", "방송"):
+        return "|".join(("d", r["URL"], r["구분"]))
+    return "|".join(("p", r["날짜"], r["언론사명"], r["구분"], r["제목"]))
+
+
+def type_order(r):
+    """같은 날짜 안에서 지면 → 방송 → 온라인"""
+    return 1 if r["구분"] == "방송" else 2 if r["구분"] == "온라인" else 0
+
+
 def to_rows(articles):
     rows = []
     for a in articles:
@@ -24,33 +36,27 @@ def to_rows(articles):
         date_text = online_date.strftime("%Y.%m.%d.")
         press = a.get("press") or ""
         url = a.get("url") or a.get("naver_link") or a.get("original_link")
+        # 엑셀에는 안 나가고 DB 저장에만 쓰는 값
+        extra = {"게재일시": a["published_at"], "키워드": a.get("keywords") or ""}
 
         if a.get("print_page") and a["print_page"] != "온라인":
             rows.append({
                 "날짜": (online_date + timedelta(days=1)).strftime("%Y.%m.%d."),
-                "언론사명": press, "구분": a["print_page"], "제목": a["title"], "URL": "-",
+                "언론사명": press, "구분": a["print_page"], "제목": a["title"], "URL": "-", **extra,
             })
         if a.get("has_video"):
-            rows.append({"날짜": date_text, "언론사명": press, "구분": "방송", "제목": a["title"], "URL": url})
-        rows.append({"날짜": date_text, "언론사명": press, "구분": "온라인", "제목": a["title"], "URL": url})
+            rows.append({"날짜": date_text, "언론사명": press, "구분": "방송", "제목": a["title"], "URL": url, **extra})
+        rows.append({"날짜": date_text, "언론사명": press, "구분": "온라인", "제목": a["title"], "URL": url, **extra})
 
-    # 중복 제거: 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)
     seen = set()
     unique = []
     for r in rows:
-        if r["구분"] in ("온라인", "방송"):
-            key = ("d", r["URL"], r["구분"])
-        else:
-            key = ("p", r["날짜"], r["언론사명"], r["구분"], r["제목"])
+        key = row_key(r)
         if key not in seen:
             seen.add(key)
             unique.append(r)
 
-    def sort_key(r):
-        type_order = 1 if r["구분"] == "방송" else 2 if r["구분"] == "온라인" else 0
-        return (-int(r["날짜"].replace(".", "")), type_order, r["언론사명"], r["제목"])
-
-    unique.sort(key=sort_key)
+    unique.sort(key=lambda r: (-int(r["날짜"].replace(".", "")), type_order(r), r["언론사명"], r["제목"]))
     for index, r in enumerate(unique, start=1):
         r["연번"] = index
     return unique
