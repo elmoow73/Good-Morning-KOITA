@@ -103,7 +103,7 @@ def remove_keyword(keyword_id: int):
 
 @app.post("/api/collect")
 def run_collect(
-    hours: int = Query(24, ge=1, le=24 * 31),
+    days: int = Query(1, ge=0, le=366),
     date_from: str | None = None,
     date_to: str | None = None,
     force: bool = False,
@@ -114,7 +114,7 @@ def run_collect(
         if datetime.now().astimezone() - finished < MIN_COLLECT_INTERVAL:
             return {"skipped": True, "last_run": last}
 
-    since, until = period_datetimes(hours, date_from, date_to)
+    since, until = period_datetimes(days, date_from, date_to)
 
     if not collect_lock.acquire(blocking=False):
         return {"skipped": True, "busy": True, "last_run": last}
@@ -139,14 +139,15 @@ def status():
 
 # ---------------- 기사 ----------------
 
-def period_datetimes(hours, date_from, date_to):
+def period_datetimes(days, date_from, date_to):
     """
-    hours면 지금부터 hours 시간 전까지,
-    날짜를 주면 date_from 00:00 ~ date_to 다음 날 00:00 (한국 시간, 끝 날짜 포함)
+    모든 기간은 날짜(한국 시간 0시) 기준이다.
+    days면 오늘 0시에서 days일 전 0시부터 지금까지 (0 = 오늘, 1 = 어제부터, 6 = 최근 7일),
+    날짜를 주면 date_from 00:00 ~ date_to 다음 날 00:00 (끝 날짜 포함)
     """
-    now = datetime.now(collector.KST)
     if not (date_from or date_to):
-        return now - timedelta(hours=hours), None
+        today = datetime.now(collector.KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        return today - timedelta(days=days), None
     try:
         start = datetime.fromisoformat(date_from).replace(tzinfo=collector.KST) if date_from else None
         end = datetime.fromisoformat(date_to).replace(tzinfo=collector.KST) + timedelta(days=1) if date_to else None
@@ -158,15 +159,15 @@ def period_datetimes(hours, date_from, date_to):
     return start or end - timedelta(days=1), end
 
 
-def period(hours, date_from, date_to):
-    since, until = period_datetimes(hours, date_from, date_to)
+def period(days, date_from, date_to):
+    since, until = period_datetimes(days, date_from, date_to)
     as_text = lambda d: d.isoformat(timespec="seconds") if d else None
     return as_text(since), as_text(until)
 
 
 @app.get("/api/articles")
-def get_articles(hours: int = 24, date_from: str | None = None, date_to: str | None = None):
-    since, until = period(hours, date_from, date_to)
+def get_articles(days: int = 1, date_from: str | None = None, date_to: str | None = None):
+    since, until = period(days, date_from, date_to)
     rows = db.list_articles(since, until)
     saved = archive.saved_urls()
     for row in rows:
@@ -218,9 +219,9 @@ def export_selected(body: Selection):
 
 
 @app.get("/api/export")
-def export(hours: int = 24, date_from: str | None = None, date_to: str | None = None):
+def export(days: int = 1, date_from: str | None = None, date_to: str | None = None):
     """기간 전체를 엑셀로 (v1.0.0 방식, 주소로 바로 받을 때)"""
-    since, until = period(hours, date_from, date_to)
+    since, until = period(days, date_from, date_to)
     return xlsx_response(db.list_articles(since, until))
 
 
