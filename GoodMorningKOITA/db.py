@@ -167,6 +167,15 @@ def list_articles(since_iso=None, until_iso=None):
     return rows
 
 
+def fill_print_pages(print_updates):
+    """검색 화면에서 찾은 지면을 이미 저장된 기사에도 채운다. 온라인으로 남아 있는 기사만 (직접 고친 값은 그대로)"""
+    with connect() as conn:
+        conn.executemany(
+            "UPDATE articles SET print_page = ? WHERE article_key = ? AND print_page = '온라인'",
+            [(page, key) for key, page in print_updates.items()],
+        )
+
+
 def articles_by_ids(ids):
     """화면에서 체크한 기사만 (list_articles와 같은 형태로)"""
     wanted = set(ids)

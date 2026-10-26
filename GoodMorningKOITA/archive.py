@@ -14,6 +14,7 @@ import csv
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -160,13 +161,25 @@ def write_copies():
 
     def write(path, fill):
         temp = path.with_suffix(path.suffix + ".tmp")
+        waiting = path.with_name(f"{path.stem}_갱신대기{path.suffix}")
+        fill(temp)
+        # 엑셀로 열려 있거나 OneDrive가 동기화하느라 잠깐 잠긴 경우가 있어 몇 번 다시 시도한다
+        for attempt in range(5):
+            try:
+                os.replace(temp, path)
+                waiting.unlink(missing_ok=True)  # 원래 파일에 저장됐으니 대기 파일은 필요 없다
+                return
+            except PermissionError:
+                time.sleep(1)
+        # 그래도 잠겨 있으면 옆에 최신 내용을 따로 저장해 둔다. 다음 저장 때 원래 파일로 다시 쓴다
         try:
-            fill(temp)
-            os.replace(temp, path)
+            os.replace(temp, waiting)
+            place = f"최신 내용은 {waiting.name}에 저장해 두었고"
         except PermissionError:
             temp.unlink(missing_ok=True)
-            warnings.append(f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
-                            "닫고 다시 DB 저장을 누르면 갱신됩니다. (기사는 SQLite에 저장됐습니다)")
+            place = "기사는 SQLite에 저장됐고"
+        warnings.append(f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
+                        f"{place}, 파일을 닫고 다시 DB 저장을 누르면 {path.name}에 반영됩니다.")
 
     def fill_csv(temp):
         # utf-8-sig: 엑셀에서 열어도 한글이 깨지지 않도록

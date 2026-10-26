@@ -121,10 +121,11 @@ def run_collect(
     try:
         keywords = db.enabled_keywords()
         run_id = db.start_run()
-        new_articles, keyword_hits, errors = collector.collect(
+        new_articles, keyword_hits, errors, print_updates = collector.collect(
             keywords, since, until, known_keys=db.known_article_keys()
         )
         new_count = db.save_articles(new_articles, keyword_hits)
+        db.fill_print_pages(print_updates)
         db.finish_run(run_id, new_count, errors)
         return {"skipped": False, "new_count": new_count, "errors": errors, "last_run": db.last_run()}
     finally:

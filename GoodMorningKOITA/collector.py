@@ -401,7 +401,11 @@ def normalize_url(url):
 
 
 def parse_search_print_pages(page_html):
-    """검색 결과 화면 HTML에서 {기사 링크: 지면} 과 화면의 기사 수를 돌려준다."""
+    """
+    검색 결과 화면 HTML에서 지면 기사를 찾는다.
+    반환: ({기사 링크 또는 "제목:" + 정리한 제목: 지면}, 화면의 기사 수)
+    링크가 API 링크와 모양이 달라 안 맞을 때를 위해 제목으로도 찾을 수 있게 넣어 둔다.
+    """
     soup = BeautifulSoup(page_html, "html.parser")
     titles = soup.select(SEARCH_TITLE_SELECTOR)
     pages = {}
@@ -415,8 +419,16 @@ def parse_search_print_pages(page_html):
             box = parent
         match = SEARCH_PRINT_RE.search(box.get_text(" ", strip=True))
         if match:
-            pages[normalize_url(title.get("href"))] = f"{match.group(1).upper()}면"
+            page = f"{match.group(1).upper()}면"
+            pages[normalize_url(title.get("href"))] = page
+            pages["제목:" + title_key(title.get_text(" ", strip=True))] = page
     return pages, len(titles)
+
+
+def title_key(title):
+    """띄어쓰기·기호를 뺀 제목 (검색 화면 제목과 API 제목을 맞출 때만 쓴다)"""
+    title = re.sub(r"새\s*창\s*열림", "", title or "")
+    return re.sub(r"[^0-9a-z가-힣]", "", title.lower())
 
 
 def open_browser(playwright):
@@ -469,22 +481,19 @@ def search_print_pages(keywords, since, until=None):
                         break
                 found, shown = parse_search_print_pages(page.content())
                 pages.update(found)
-                errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, 그중 지면 {len(found)}건")
+                errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, 그중 지면 {sum(1 for k in found if not k.startswith("제목:"))}건")
             except Exception as error:
                 errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 읽지 못했습니다: {error}")
         browser.close()
     return pages, errors
 
 
-def apply_print_pages(articles, print_pages):
-    for article in articles:
-        if article.get("print_page", "온라인") != "온라인":
-            continue
-        for link in (article.get("original_link"), article.get("naver_link")):
-            page = print_pages.get(normalize_url(link)) if link else None
-            if page:
-                article["print_page"] = page
-                break
+def find_print_page_for(article, print_pages):
+    """검색 화면에서 찾은 지면 중 이 기사의 것. 링크로 먼저, 안 되면 제목으로 맞춘다."""
+    for link in (article.get("original_link"), article.get("naver_link")):
+        if link and normalize_url(link) in print_pages:
+            return print_pages[normalize_url(link)]
+    return print_pages.get("제목:" + title_key(article.get("title")))
 
 
 # =========================================================
@@ -495,7 +504,7 @@ def collect(keywords, since, until=None, known_keys=None):
     """
     키워드 목록으로 since ~ until 사이에 발행된 기사를 모은다. (until이 없으면 지금까지)
     known_keys에 있는 기사(이미 DB에 있는 기사)는 페이지 보강을 건너뛴다.
-    반환: (새 기사 목록, 이미 있던 기사의 (key, keyword) 목록, 오류 목록)
+    반환: (새 기사 목록, 이미 있던 기사의 (key, keyword) 목록, 오류·안내 목록, {기사 key: 지면})
     """
     known_keys = known_keys or set()
     session = requests.Session()
@@ -521,13 +530,21 @@ def collect(keywords, since, until=None, known_keys=None):
     new_articles = [a for k, a in found.items() if k not in known_keys]
     enrich_articles(new_articles)
 
-    # 네이버 기사 페이지에서 지면을 못 찾은 새 기사는 검색 결과 화면의 지면 표시로 채운다
-    if any(a.get("print_page", "온라인") == "온라인" for a in new_articles):
+    # 검색 결과 화면의 지면 표시로 기간 안 모든 기사(이미 DB에 있던 기사 포함)의 지면을 찾는다
+    print_updates = {}
+    if found:
         try:
             print_pages, print_errors = search_print_pages(keywords, since, until)
             errors.extend(print_errors)
-            apply_print_pages(new_articles, print_pages)
+            for key, article in found.items():
+                page = find_print_page_for(article, print_pages)
+                if page:
+                    print_updates[key] = page
+                    if key not in known_keys and article.get("print_page", "온라인") == "온라인":
+                        article["print_page"] = page
+            shown = sum(1 for k in print_pages if not k.startswith("제목:"))
+            errors.append(f"[안내] 지면 표시 {shown}건 중 이번 목록 기사와 맞춘 것 {len(print_updates)}건")
         except Exception as error:
             errors.append(f"지면 확인을 하지 못했습니다: {error}")
 
-    return new_articles, keyword_hits, errors
+    return new_articles, keyword_hits, errors, print_updates
