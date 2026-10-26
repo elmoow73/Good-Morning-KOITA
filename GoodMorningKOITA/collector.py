@@ -6,6 +6,7 @@
    (크롬 없이 requests로 HTML만 받아서 판별)
 """
 
+import asyncio
 import html
 import os
 import re
@@ -431,71 +432,95 @@ def title_key(title):
     return re.sub(r"[^0-9a-z가-힣]", "", title.lower())
 
 
-def open_browser(playwright):
+async def open_browser(playwright):
     """PC에 있는 크롬 → 엣지 → Playwright 크로미움 순서로 연다. .env의 BROWSER_SHOW=1이면 창을 띄운다."""
     headless = os.getenv("BROWSER_SHOW", "").strip() != "1"
     for channel in ("chrome", "msedge", None):
         try:
-            return playwright.chromium.launch(channel=channel, headless=headless) if channel \
-                else playwright.chromium.launch(headless=headless)
+            return await (playwright.chromium.launch(channel=channel, headless=headless) if channel
+                          else playwright.chromium.launch(headless=headless))
         except Exception:  # 그 브라우저가 설치돼 있지 않음
             continue
     raise RuntimeError("크롬이나 엣지를 찾지 못했습니다. 크롬을 설치하거나 'python -m playwright install chromium'을 실행하세요.")
 
 
+def search_page_url(keyword, since, until):
+    """네이버에서 직접 기간을 지정했을 때와 같은 형식의 검색 주소 (최신순)"""
+    # until은 끝 날짜 다음 날 0시이므로 1초 빼서 끝 날짜로
+    first = since.astimezone(KST)
+    last = (until - timedelta(seconds=1)).astimezone(KST) if until else datetime.now(KST)
+    params = {
+        "ssc": "tab.news.all", "where": "news", "query": keyword, "sm": "tab_opt", "sort": "1",
+        "pd": "3", "ds": first.strftime("%Y.%m.%d"), "de": last.strftime("%Y.%m.%d"),
+        "nso": f"so:dd,p:from{first.strftime('%Y%m%d')}to{last.strftime('%Y%m%d')}",
+    }
+    return f"{SEARCH_PAGE_URL}?" + "&".join(f"{k}={quote(v)}" for k, v in params.items())
+
+
+async def scroll_search_page(browser, keyword, since, until):
+    """키워드 하나의 검색 화면을 새 탭으로 열어 끝까지 내리고 HTML을 돌려준다."""
+    page = await browser.new_page(user_agent=HEADERS["User-Agent"], locale="ko-KR")
+    try:
+        await page.goto(search_page_url(keyword, since, until),
+                        wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000)
+        try:
+            await page.wait_for_selector(SEARCH_TITLE_SELECTOR, timeout=SEARCH_SCROLL_WAIT_MS * 2)
+        except Exception:
+            pass  # 기간에 기사가 없으면 제목이 안 나온다
+        # 맨 아래로 내리고, 새 기사가 나타나면 바로 다음으로 넘어간다.
+        # 기다려도 안 늘어나는 일이 SEARCH_STOP_REPEATS번 연속이면 기간 기사가 다 나온 것으로 본다
+        count, same = await page.locator(SEARCH_TITLE_SELECTOR).count(), 0
+        for _ in range(SEARCH_MAX_SCROLLS):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.keyboard.press("End")
+            try:
+                await page.wait_for_function(
+                    "([selector, before]) => document.querySelectorAll(selector).length > before",
+                    arg=[SEARCH_TITLE_SELECTOR, count], timeout=SEARCH_SCROLL_WAIT_MS,
+                )
+                same = 0
+            except Exception:
+                same += 1
+                if same >= SEARCH_STOP_REPEATS:
+                    break
+            count = await page.locator(SEARCH_TITLE_SELECTOR).count()
+        return await page.content()
+    finally:
+        await page.close()
+
+
+async def search_print_pages_async(keywords, since, until):
+    from playwright.async_api import async_playwright
+
+    pages, errors = {}, []
+    async with async_playwright() as playwright:
+        browser = await open_browser(playwright)
+        # 키워드마다 탭을 하나씩 열어 동시에 내린다. 걸리는 시간은 가장 오래 걸리는 키워드 하나 정도
+        results = await asyncio.gather(
+            *(scroll_search_page(browser, keyword, since, until) for keyword in keywords),
+            return_exceptions=True,
+        )
+        await browser.close()
+
+    for keyword, result in zip(keywords, results):
+        if isinstance(result, Exception):
+            errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 읽지 못했습니다: {result}")
+            continue
+        found, shown = parse_search_print_pages(result)
+        pages.update(found)
+        errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, "
+                      f"그중 지면 {sum(1 for k in found if not k.startswith('제목:'))}건")
+    return pages, errors
+
+
 def search_print_pages(keywords, since, until=None):
     """
-    키워드를 OR로 묶은 네이버 뉴스 검색 결과 화면(최신순)을 브라우저로 열어 지면 기사 링크를 모은다.
-    검색 화면은 자바스크립트로 기사 목록을 그리므로 HTML만 받아서는 읽을 수 없다. (예전 크롤러와 같은 방식)
-    화면에서 검색한 기간과 똑같은 기간으로 네이버를 검색하고, 그 기간 기사가 끝까지 나올 때까지 내린다.
+    키워드별 네이버 뉴스 검색 결과 화면(최신순, 화면에서 고른 기간과 같은 기간)을 브라우저 탭으로 동시에 열어
+    끝까지 내린 뒤 지면 기사를 모은다. 검색 화면은 자바스크립트로 기사 목록을 그리므로 HTML만 받아서는 읽을 수 없다.
     반환: ({기사 링크: 지면}, 안내·오류 목록)
     """
-    from playwright.sync_api import sync_playwright
-
-    # until은 끝 날짜 다음 날 0시이므로 1초 빼서 끝 날짜로
-    last_day = (until - timedelta(seconds=1)) if until else datetime.now(KST)
-    period = f"p:from{since.astimezone(KST).strftime('%Y%m%d')}to{last_day.astimezone(KST).strftime('%Y%m%d')}"
-    # 키워드를 '|'(네이버 검색의 OR)로 묶어 한 번만 검색한다. 키워드마다 따로 내리면 5배 걸린다
-    query = " | ".join(keywords)
-    pages, errors = {}, []
-    with sync_playwright() as playwright:
-        browser = open_browser(playwright)
-        page = browser.new_page(user_agent=HEADERS["User-Agent"], locale="ko-KR")
-        try:
-            page.goto(
-                f"{SEARCH_PAGE_URL}?ssc=tab.news.all&where=news&query={quote(query)}"
-                f"&sm=tab_opt&sort=1&nso={quote('so:dd,' + period)}",
-                wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000,
-            )
-            try:
-                page.wait_for_selector(SEARCH_TITLE_SELECTOR, timeout=SEARCH_SCROLL_WAIT_MS * 2)
-            except Exception:
-                pass  # 기간에 기사가 없으면 제목이 안 나온다
-            # 맨 아래로 내리고, 새 기사가 나타나면 바로 다음으로 넘어간다.
-            # 기다려도 안 늘어나는 일이 SEARCH_STOP_REPEATS번 연속이면 기간 기사가 다 나온 것으로 본다
-            count, same = page.locator(SEARCH_TITLE_SELECTOR).count(), 0
-            for _ in range(SEARCH_MAX_SCROLLS):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.keyboard.press("End")
-                try:
-                    page.wait_for_function(
-                        "([selector, before]) => document.querySelectorAll(selector).length > before",
-                        arg=[SEARCH_TITLE_SELECTOR, count], timeout=SEARCH_SCROLL_WAIT_MS,
-                    )
-                    same = 0
-                except Exception:
-                    same += 1
-                    if same >= SEARCH_STOP_REPEATS:
-                        break
-                count = page.locator(SEARCH_TITLE_SELECTOR).count()
-            found, shown = parse_search_print_pages(page.content())
-            pages.update(found)
-            errors.append(f"[안내] 네이버 검색 화면 기사 {shown}건 확인, "
-                          f"그중 지면 {sum(1 for k in found if not k.startswith('제목:'))}건")
-        except Exception as error:
-            errors.append(f"지면 확인용 네이버 검색 화면을 읽지 못했습니다: {error}")
-        browser.close()
-    return pages, errors
+    # 웹 서버의 작업 스레드에서 불리므로 여기서 새 이벤트 루프를 만들어 돌린다
+    return asyncio.run(search_print_pages_async(keywords, since, until))
 
 
 def find_print_page_for(article, print_pages):
