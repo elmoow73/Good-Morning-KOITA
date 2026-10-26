@@ -385,7 +385,9 @@ def enrich_articles(articles):
 # 같은 키워드로 검색 결과 화면을 브라우저(Playwright)로 열어 기사 링크별 지면을 읽는다.
 
 SEARCH_PAGE_URL = "https://search.naver.com/search.naver"
-SEARCH_MAX_SCROLLS = 15       # 키워드당 아래로 내리는 최대 횟수
+SEARCH_MAX_SCROLLS = 200      # 키워드당 아래로 내리는 최대 횟수 (기간 기사가 다 나오면 그 전에 멈춤)
+SEARCH_SCROLL_WAIT_MS = 2500  # 내린 뒤 다음 기사가 불러와지길 기다리는 시간
+SEARCH_STOP_REPEATS = 4       # 이만큼 연속으로 기사 수가 그대로면 끝까지 다 나온 것으로 본다
 SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]?\d{1,3})\s*면\s*\d{1,2}\s*단")
 SEARCH_TITLE_SELECTOR = "a[data-heatmap-target='.tit'], a.news_tit"
 
@@ -429,15 +431,18 @@ def open_browser(playwright):
     raise RuntimeError("크롬이나 엣지를 찾지 못했습니다. 크롬을 설치하거나 'python -m playwright install chromium'을 실행하세요.")
 
 
-def search_print_pages(keywords, since):
+def search_print_pages(keywords, since, until=None):
     """
     키워드마다 네이버 뉴스 검색 결과 화면(최신순)을 브라우저로 열어 지면 기사 링크를 모은다.
     검색 화면은 자바스크립트로 기사 목록을 그리므로 HTML만 받아서는 읽을 수 없다. (예전 크롤러와 같은 방식)
-    반환: ({기사 링크: 지면}, 오류 목록)
+    화면에서 검색한 기간과 똑같은 기간으로 네이버를 검색하고, 그 기간 기사가 끝까지 나올 때까지 내린다.
+    반환: ({기사 링크: 지면}, 안내·오류 목록)
     """
     from playwright.sync_api import sync_playwright
 
-    period = f"p:from{since.strftime('%Y%m%d')}to{datetime.now(KST).strftime('%Y%m%d')}"
+    # until은 끝 날짜 다음 날 0시이므로 1초 빼서 끝 날짜로
+    last_day = (until - timedelta(seconds=1)) if until else datetime.now(KST)
+    period = f"p:from{since.astimezone(KST).strftime('%Y%m%d')}to{last_day.astimezone(KST).strftime('%Y%m%d')}"
     pages, errors = {}, []
     with sync_playwright() as playwright:
         browser = open_browser(playwright)
@@ -449,19 +454,22 @@ def search_print_pages(keywords, since):
                     f"&sm=tab_opt&sort=1&nso={quote('so:dd,' + period)}",
                     wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000,
                 )
-                page.wait_for_timeout(1500)
-                # 아래로 내려야 기사가 더 나온다. 기사 수가 세 번 연속 그대로면 끝
-                count, same = 0, 0
+                page.wait_for_timeout(SEARCH_SCROLL_WAIT_MS)
+                # 아래로 내려야 기사가 더 나온다. 맨 아래로 이동하고 기다리기를 반복해
+                # 기사 수가 SEARCH_STOP_REPEATS번 연속 그대로면 기간 기사가 다 나온 것으로 본다
+                count, same = page.locator(SEARCH_TITLE_SELECTOR).count(), 0
                 for _ in range(SEARCH_MAX_SCROLLS):
-                    page.mouse.wheel(0, 5000)
-                    page.wait_for_timeout(1200)
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.keyboard.press("End")
+                    page.wait_for_timeout(SEARCH_SCROLL_WAIT_MS)
                     current = page.locator(SEARCH_TITLE_SELECTOR).count()
                     same = same + 1 if current == count else 0
                     count = current
-                    if same >= 3:
+                    if same >= SEARCH_STOP_REPEATS:
                         break
-                found, _ = parse_search_print_pages(page.content())
+                found, shown = parse_search_print_pages(page.content())
                 pages.update(found)
+                errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, 그중 지면 {len(found)}건")
             except Exception as error:
                 errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 읽지 못했습니다: {error}")
         browser.close()
@@ -516,7 +524,7 @@ def collect(keywords, since, until=None, known_keys=None):
     # 네이버 기사 페이지에서 지면을 못 찾은 새 기사는 검색 결과 화면의 지면 표시로 채운다
     if any(a.get("print_page", "온라인") == "온라인" for a in new_articles):
         try:
-            print_pages, print_errors = search_print_pages(keywords, since)
+            print_pages, print_errors = search_print_pages(keywords, since, until)
             errors.extend(print_errors)
             apply_print_pages(new_articles, print_pages)
         except Exception as error:
