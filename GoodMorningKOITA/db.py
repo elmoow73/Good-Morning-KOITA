@@ -13,7 +13,7 @@ DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협�
 OLD_DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
 
 # PRAGMA user_version으로 기록하는 DB 구조 버전
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keywords (
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS articles (
     naver_link     TEXT,
     original_link  TEXT,
     published_at   TEXT NOT NULL,
-    collected_at   TEXT NOT NULL
+    collected_at   TEXT NOT NULL,
+    source         TEXT NOT NULL DEFAULT 'api'
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at);
 
@@ -80,6 +81,12 @@ def init_db():
                 "INSERT OR IGNORE INTO keywords (keyword, created_at) VALUES (?, ?)",
                 [(k, now_iso()) for k in DEFAULT_KEYWORDS],
             )
+            conn.execute("PRAGMA user_version = 1")
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+            # v1.2.0: 기사를 어디서 받았는지 (api: 뉴스 검색 API, search: 네이버 검색 화면)
+            columns = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
+            if "source" not in columns:
+                conn.execute("ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'api'")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -128,12 +135,13 @@ def save_articles(new_articles, keyword_hits):
             conn.execute(
                 """INSERT OR IGNORE INTO articles
                    (article_key, title, description, press, print_page, has_video,
-                    naver_link, original_link, published_at, collected_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    naver_link, original_link, published_at, collected_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     a.get("naver_link") or a["original_link"], a["title"], a.get("description"),
                     a.get("press", ""), a.get("print_page", "온라인"), 1 if a.get("has_video") else 0,
                     a.get("naver_link"), a["original_link"], a["published_at"], collected_at,
+                    a.get("source", "api"),
                 ),
             )
         for key, keyword in keyword_hits:
@@ -165,6 +173,15 @@ def list_articles(since_iso=None, until_iso=None):
         row["has_video"] = bool(row["has_video"])
         row["url"] = row["original_link"] or row["naver_link"]
     return rows
+
+
+def fill_print_pages(print_updates):
+    """검색 화면에서 찾은 지면을 이미 저장된 기사에도 채운다. 온라인으로 남아 있는 기사만 (직접 고친 값은 그대로)"""
+    with connect() as conn:
+        conn.executemany(
+            "UPDATE articles SET print_page = ? WHERE article_key = ? AND print_page = '온라인'",
+            [(page, key) for key, page in print_updates.items()],
+        )
 
 
 def articles_by_ids(ids):

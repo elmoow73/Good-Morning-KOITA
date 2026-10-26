@@ -2,7 +2,7 @@
 기사 DB: 화면에서 체크한 기사를 엑셀과 같은 행 형태로 계속 쌓아 두는 별도 저장소
 
 다른 프로그램이 읽어 가도록 database/ 폴더에 같은 내용을 세 가지 형식으로 둔다.
-- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 한다
+- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 게재일시 최신순으로 다시 정렬한다
 - koita_news.csv    : 저장할 때마다 원본에서 다시 만드는 사본 (엑셀·메모장 등 어디서나 열림)
 - koita_news.json   : 저장할 때마다 원본에서 다시 만드는 사본 (웹·스크립트용)
 
@@ -14,6 +14,7 @@ import csv
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -68,32 +69,83 @@ def connect():
         conn.close()
 
 
+def duplicate_keys(row):
+    """중복 기준은 엑셀과 같다: 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)"""
+    return {row["row_key"]}
+
+
+def sort_key(row):
+    """게재일시(published_at) 최신순. 같은 기사의 행은 지면 → 방송 → 온라인"""
+    return (row["published_at"], -exporter.type_order({"구분": row["type"]}), row["title"])
+
+
+def rewrite(conn, rows):
+    """
+    중복을 지우고 기사 날짜순으로 정렬해서 표를 다시 쓴다. 연번(seq)은 정렬된 순서대로 1부터 다시 매긴다.
+    rows는 먼저 저장된 것부터 들어 있어야 한다 (중복이면 먼저 저장된 행을 남긴다).
+    반환: 남은 행 목록
+    """
+    seen = set()
+    kept = []
+    for row in rows:
+        keys = duplicate_keys(row)
+        if keys & seen:
+            continue
+        seen |= keys
+        kept.append(row)
+    kept.sort(key=sort_key, reverse=True)
+
+    names = [name for name, _ in COLUMNS if name != "seq"] + ["row_key"]
+    conn.execute("DELETE FROM news")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name = 'news'")
+    conn.executemany(
+        f"INSERT INTO news (seq, {', '.join(names)}) VALUES ({', '.join('?' * (len(names) + 1))})",
+        [(seq, *(row[n] for n in names)) for seq, row in enumerate(kept, start=1)],
+    )
+    return kept
+
+
+def stored_rows(conn):
+    # 저장일시, 예전 연번 순 = 먼저 저장된 순
+    return [dict(r) for r in conn.execute("SELECT * FROM news ORDER BY saved_at, seq")]
+
+
 def save(articles):
     """
-    기사들을 엑셀 행으로 바꿔 DB 맨 아래에 붙인다. 이미 있는 행은 건너뛴다.
-    반환: {"added", "skipped", "total", "warnings"}
+    기사들을 엑셀 행으로 바꿔 DB에 더한다. 이미 있는 기사는 건너뛰고, 전체를 기사 날짜순으로 다시 정렬한다.
+    반환: {"added", "skipped", "removed", "total", "warnings"}
     """
-    rows = exporter.to_rows(articles)
-    # 아래로 쌓이므로 한 번에 저장하는 묶음 안에서도 오래된 것부터
-    rows.sort(key=lambda r: (r["날짜"], exporter.type_order(r), r["게재일시"]))
     saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    new_rows = [
+        {
+            "date": r["날짜"].rstrip(".").replace(".", "-"), "press": r["언론사명"], "type": r["구분"],
+            "title": r["제목"], "url": r["URL"], "published_at": r["게재일시"],
+            "keywords": r["키워드"].replace('"', ""), "saved_at": saved_at, "row_key": exporter.row_key(r),
+        }
+        for r in exporter.to_rows(articles)
+    ]
 
-    added = 0
     with connect() as conn:
-        for r in rows:
-            cursor = conn.execute(
-                """INSERT OR IGNORE INTO news
-                   (date, press, type, title, url, published_at, keywords, saved_at, row_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    r["날짜"].rstrip(".").replace(".", "-"), r["언론사명"], r["구분"], r["제목"], r["URL"],
-                    r["게재일시"], r["키워드"].replace('"', ""), saved_at, exporter.row_key(r),
-                ),
-            )
-            added += cursor.rowcount
-        total = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
+        existing = stored_rows(conn)
+        before = len(rewrite(conn, existing))  # 예전부터 있던 중복도 이번에 정리된다
+        total = len(rewrite(conn, existing + new_rows))
 
-    return {"added": added, "skipped": len(rows) - added, "total": total, "warnings": write_copies()}
+    added = total - before
+    return {
+        "added": added, "skipped": len(new_rows) - added, "removed": len(existing) - before,
+        "total": total, "warnings": write_copies(),
+    }
+
+
+def tidy():
+    """프로그램을 켤 때 예전 DB의 중복을 정리하고 날짜순으로 맞춘다. 정리한 행 수를 돌려준다."""
+    with connect() as conn:
+        existing = stored_rows(conn)
+        if not existing:
+            return 0
+        removed = len(existing) - len(rewrite(conn, existing))
+    write_copies()
+    return removed
 
 
 def all_rows():
@@ -109,13 +161,25 @@ def write_copies():
 
     def write(path, fill):
         temp = path.with_suffix(path.suffix + ".tmp")
+        waiting = path.with_name(f"{path.stem}_갱신대기{path.suffix}")
+        fill(temp)
+        # 엑셀로 열려 있거나 OneDrive가 동기화하느라 잠깐 잠긴 경우가 있어 몇 번 다시 시도한다
+        for attempt in range(5):
+            try:
+                os.replace(temp, path)
+                waiting.unlink(missing_ok=True)  # 원래 파일에 저장됐으니 대기 파일은 필요 없다
+                return
+            except PermissionError:
+                time.sleep(1)
+        # 그래도 잠겨 있으면 옆에 최신 내용을 따로 저장해 둔다. 다음 저장 때 원래 파일로 다시 쓴다
         try:
-            fill(temp)
-            os.replace(temp, path)
+            os.replace(temp, waiting)
+            place = f"최신 내용은 {waiting.name}에 저장해 두었고"
         except PermissionError:
             temp.unlink(missing_ok=True)
-            warnings.append(f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
-                            "닫고 다시 DB 저장을 누르면 갱신됩니다. (기사는 SQLite에 저장됐습니다)")
+            place = "기사는 SQLite에 저장됐고"
+        warnings.append(f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
+                        f"{place}, 파일을 닫고 다시 DB 저장을 누르면 {path.name}에 반영됩니다.")
 
     def fill_csv(temp):
         # utf-8-sig: 엑셀에서 열어도 한글이 깨지지 않도록
