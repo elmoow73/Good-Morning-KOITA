@@ -497,10 +497,16 @@ def search_page_url(keyword, since, until):
     # until은 끝 날짜 다음 날 0시이므로 1초 빼서 끝 날짜로
     first = since.astimezone(KST)
     last = (until - timedelta(seconds=1)).astimezone(KST) if until else datetime.now(KST)
+    # 완전일치: 따옴표로 감싼다 (키워드에 이미 있으면 그대로)
+    phrase = keyword.strip()
+    if not (phrase.startswith('"') and phrase.endswith('"')):
+        phrase = f'"{phrase.strip(chr(34))}"'
+    # 예전 크롤러와 같은 상세검색 주소(sm=tab_dgs, qdt=1). 이게 빠지면 따옴표가 무시돼 일부 일치로 검색되고
+    # 관련도순이 섞인다. sort=1 / so:dd = 최신순
     params = {
-        "ssc": "tab.news.all", "where": "news", "query": keyword, "sm": "tab_opt", "sort": "1",
+        "ssc": "tab.news.all", "where": "news", "query": phrase, "sm": "tab_dgs", "sort": "1",
         "pd": "3", "ds": first.strftime("%Y.%m.%d"), "de": last.strftime("%Y.%m.%d"),
-        "nso": f"so:dd,p:from{first.strftime('%Y%m%d')}to{last.strftime('%Y%m%d')}",
+        "nso": f"so:dd,p:from{first.strftime('%Y%m%d')}to{last.strftime('%Y%m%d')}", "qdt": "1",
     }
     return f"{SEARCH_PAGE_URL}?" + "&".join(f"{k}={quote(v)}" for k, v in params.items())
 
