@@ -50,6 +50,7 @@
   .badge.video { background: var(--green-soft); color: var(--green); }
   .kw { font-size: 12px; color: var(--muted); }
   .chip-or { color: var(--muted); font-size: 12px; align-self: center; }
+  .badge.search { background: #f3e8ff; color: #7e22ce; cursor: default; }
   .badge.saved { background: var(--accent-soft); color: var(--accent); cursor: default; }
   th.check, td.check { width: 28px; padding-right: 0; }
   input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
@@ -114,6 +115,11 @@
         </span>
         <select id="press-filter" title="언론사로 골라 보기"><option value="">언론사 전체</option></select>
         <select id="kw-filter" title="키워드로 골라 보기"><option value="">키워드 전체</option></select>
+        <select id="source-filter" title="어디서 받은 기사인지">
+          <option value="">출처 전체</option>
+          <option value="api">API 목록</option>
+          <option value="search">검색 화면에서 더한 기사</option>
+        </select>
         <select id="sort" title="정렬">
           <option value="new">최신순</option>
           <option value="old">오래된순</option>
@@ -260,7 +266,8 @@ function visibleArticles() {
   const list = articles.filter(a =>
     (!term || `${a.title} ${a.press} ${a.description}`.toLowerCase().includes(term)) &&
     (!press || (a.press || "?") === press) &&
-    (!keyword || keywordsOf(a).includes(keyword)));
+    (!keyword || keywordsOf(a).includes(keyword)) &&
+    (!$("source-filter").value || (a.source || "api") === $("source-filter").value));
   const byTime = (x, y) => y.published_at.localeCompare(x.published_at);
   const sorters = {
     new: byTime,
@@ -295,6 +302,7 @@ function renderArticles() {
           : ""}
         <span class="badge online" data-print="${a.id}" title="클릭해서 지면 입력·수정">온라인</span>
         ${a.has_video ? `<span class="badge video" data-video="${a.id}" title="클릭해서 영상 표시 해제">영상</span>` : ""}
+        ${a.source === "search" ? `<span class="badge search" title="API 목록에 없어 네이버 검색 화면에서 더한 기사. 게재시각은 00:00으로 표시">검색화면</span>` : ""}
         ${a.archived ? `<span class="badge saved" title="DB에 이미 저장된 기사">저장됨</span>` : ""}
       </td>
       <td>
@@ -452,7 +460,7 @@ $("period").addEventListener("change", () => {
 $("date-from").addEventListener("change", loadArticles);
 $("date-to").addEventListener("change", loadArticles);
 $("filter").addEventListener("input", renderArticles);
-for (const id of ["press-filter", "kw-filter", "sort"]) $(id).addEventListener("change", renderArticles);
+for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
 // 첫 화면: 키워드를 보여주고, 바로 최근 24시간 기사를 검색
 (async () => {

@@ -13,7 +13,7 @@ DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협�
 OLD_DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
 
 # PRAGMA user_version으로 기록하는 DB 구조 버전
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keywords (
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS articles (
     naver_link     TEXT,
     original_link  TEXT,
     published_at   TEXT NOT NULL,
-    collected_at   TEXT NOT NULL
+    collected_at   TEXT NOT NULL,
+    source         TEXT NOT NULL DEFAULT 'api'
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at);
 
@@ -80,6 +81,12 @@ def init_db():
                 "INSERT OR IGNORE INTO keywords (keyword, created_at) VALUES (?, ?)",
                 [(k, now_iso()) for k in DEFAULT_KEYWORDS],
             )
+            conn.execute("PRAGMA user_version = 1")
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+            # v1.2.0: 기사를 어디서 받았는지 (api: 뉴스 검색 API, search: 네이버 검색 화면)
+            columns = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
+            if "source" not in columns:
+                conn.execute("ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'api'")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -120,12 +127,6 @@ def known_article_keys():
         return {r[0] for r in conn.execute("SELECT article_key FROM articles")}
 
 
-def print_article_keys():
-    """지면이 이미 확인된 기사"""
-    with connect() as conn:
-        return {r[0] for r in conn.execute("SELECT article_key FROM articles WHERE print_page != '온라인'")}
-
-
 def save_articles(new_articles, keyword_hits):
     """새 기사를 저장하고, 기사-키워드 연결을 기록한다. 저장된 새 기사 수를 돌려준다."""
     collected_at = now_iso()
@@ -134,12 +135,13 @@ def save_articles(new_articles, keyword_hits):
             conn.execute(
                 """INSERT OR IGNORE INTO articles
                    (article_key, title, description, press, print_page, has_video,
-                    naver_link, original_link, published_at, collected_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    naver_link, original_link, published_at, collected_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     a.get("naver_link") or a["original_link"], a["title"], a.get("description"),
                     a.get("press", ""), a.get("print_page", "온라인"), 1 if a.get("has_video") else 0,
                     a.get("naver_link"), a["original_link"], a["published_at"], collected_at,
+                    a.get("source", "api"),
                 ),
             )
         for key, keyword in keyword_hits:

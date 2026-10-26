@@ -386,7 +386,7 @@ def enrich_articles(articles):
 # 같은 키워드로 검색 결과 화면을 브라우저(Playwright)로 열어 기사 링크별 지면을 읽는다.
 
 SEARCH_PAGE_URL = "https://search.naver.com/search.naver"
-SEARCH_MAX_SCROLLS = 200      # 키워드당 아래로 내리는 최대 횟수 (기간 기사가 다 나오면 그 전에 멈춤)
+SEARCH_MAX_SCROLLS = 1000     # 키워드당 아래로 내리는 최대 횟수 (기간 기사가 다 나오면 그 전에 멈춤)
 SEARCH_SCROLL_WAIT_MS = 3000  # 내린 뒤 새 기사를 기다리는 최대 시간 (나타나면 바로 넘어감)
 SEARCH_STOP_REPEATS = 2       # 이만큼 연속으로 기다려도 안 늘어나면 끝까지 다 나온 것으로 본다
 SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]?\d{1,3})\s*면\s*\d{1,2}\s*단")
@@ -401,15 +401,39 @@ def normalize_url(url):
     return f"{host}{path}" + (f"?{parsed.query}" if parsed.query else "")
 
 
-def parse_search_print_pages(page_html):
+SEARCH_DATE_RE = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})\.|(\d+)\s*(초|분|시간|일|주)\s*전")
+# 검색 화면에서 기사 제목 앞에 나오지만 언론사명이 아닌 글자 (예전 크롤러와 같은 목록)
+SEARCH_NOT_PRESS = {"새 창 열림", "새창 열림", "새 창", "새창", "네이버뉴스", "네이버 뉴스", "구독", "구독중",
+                    "기사원문", "원문보기", "언론사 선정", "관련뉴스", "뉴스홈", "공유", "선택됨", "온라인", "방송"}
+
+
+def search_date(text, now=None):
+    """검색 화면의 '2026.07.15.' 또는 '3시간 전' 같은 표시를 날짜로. 없으면 None"""
+    match = SEARCH_DATE_RE.search(text or "")
+    if not match:
+        return None
+    if match.group(1):
+        return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), tzinfo=KST)
+    now = now or datetime.now(KST)
+    amount, unit = int(match.group(4)), match.group(5)
+    days = {"일": amount, "주": amount * 7}.get(unit, 0)
+    if unit in ("초", "분", "시간"):
+        moment = now - timedelta(**{{"초": "seconds", "분": "minutes", "시간": "hours"}[unit]: amount})
+    else:
+        moment = now - timedelta(days=days)
+    return moment.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def parse_search_page(page_html, now=None):
     """
-    검색 결과 화면 HTML에서 지면 기사를 찾는다.
-    반환: ({기사 링크 또는 "제목:" + 정리한 제목: 지면}, 화면의 기사 수)
-    링크가 API 링크와 모양이 달라 안 맞을 때를 위해 제목으로도 찾을 수 있게 넣어 둔다.
+    검색 결과 화면 HTML에서 기사들을 읽는다.
+    반환: (지면 표시 {기사 링크 또는 "제목:" + 정리한 제목: 지면}, 기사 목록, 화면의 기사 수)
+    지면 표시는 링크가 API 링크와 모양이 달라 안 맞을 때를 위해 제목으로도 찾을 수 있게 넣어 둔다.
+    기사 목록은 {url, title, press, date, print_page}이고, API 목록에 없는 기사를 채울 때 쓴다.
     """
     soup = BeautifulSoup(page_html, "html.parser")
     titles = soup.select(SEARCH_TITLE_SELECTOR)
-    pages = {}
+    pages, items = {}, []
     for title in titles:
         # 제목에서 위로 올라가며 이 기사 한 건을 감싸는 가장 큰 상자를 찾는다 (다른 기사 제목이 섞이기 직전까지)
         box = title
@@ -418,12 +442,36 @@ def parse_search_print_pages(page_html):
             if parent is None or len(parent.select(SEARCH_TITLE_SELECTOR)) > 1:
                 break
             box = parent
-        match = SEARCH_PRINT_RE.search(box.get_text(" ", strip=True))
+        box_text = box.get_text(" ", strip=True)
+        title_text = re.sub(r"새\s*창\s*열림", "", title.get_text(" ", strip=True)).strip()
+        url = title.get("href") or ""
+
+        match = SEARCH_PRINT_RE.search(box_text)
+        page = f"{match.group(1).upper()}면" if match else "온라인"
         if match:
-            page = f"{match.group(1).upper()}면"
-            pages[normalize_url(title.get("href"))] = page
-            pages["제목:" + title_key(title.get_text(" ", strip=True))] = page
-    return pages, len(titles)
+            pages[normalize_url(url)] = page
+            pages["제목:" + title_key(title_text)] = page
+
+        # 제목 앞에 나오는 글자 중 날짜·지면·안내 문구가 아닌 첫 번째가 언론사명
+        press = ""
+        before = []
+        for text in box.find_all(string=True):
+            if title in text.parents:
+                break
+            if text.strip():
+                before.append(text.strip())
+        for text in before:
+            text = re.sub(r"\s+", " ", text)
+            if (text in SEARCH_NOT_PRESS or SEARCH_DATE_RE.search(text) or SEARCH_PRINT_RE.search(text)
+                    or re.fullmatch(r"[A-Za-z]?\d+\s*면|\d+\s*단", text) or len(text) > 30):
+                continue
+            press = text
+            break
+
+        date = search_date(box_text, now)
+        if url.startswith("http") and title_text and date:
+            items.append({"url": url, "title": title_text, "press": press, "date": date, "print_page": page})
+    return pages, items, len(titles)
 
 
 def title_key(title):
@@ -492,7 +540,7 @@ async def scroll_search_page(browser, keyword, since, until):
 async def search_print_pages_async(keywords, since, until):
     from playwright.async_api import async_playwright
 
-    pages, errors = {}, []
+    pages, items, errors = {}, [], []
     async with async_playwright() as playwright:
         browser = await open_browser(playwright)
         # 키워드마다 탭을 하나씩 열어 동시에 내린다. 걸리는 시간은 가장 오래 걸리는 키워드 하나 정도
@@ -506,21 +554,55 @@ async def search_print_pages_async(keywords, since, until):
         if isinstance(result, Exception):
             errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 읽지 못했습니다: {result}")
             continue
-        found, shown = parse_search_print_pages(result)
+        found, keyword_items, shown = parse_search_page(result)
         pages.update(found)
+        items.extend({**item, "keyword": keyword} for item in keyword_items)
         errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, "
                       f"그중 지면 {sum(1 for k in found if not k.startswith('제목:'))}건")
-    return pages, errors
+    return pages, items, errors
 
 
 def search_print_pages(keywords, since, until=None):
     """
     키워드별 네이버 뉴스 검색 결과 화면(최신순, 화면에서 고른 기간과 같은 기간)을 브라우저 탭으로 동시에 열어
     끝까지 내린 뒤 지면 기사를 모은다. 검색 화면은 자바스크립트로 기사 목록을 그리므로 HTML만 받아서는 읽을 수 없다.
-    반환: ({기사 링크: 지면}, 안내·오류 목록)
+    반환: ({기사 링크: 지면}, 검색 화면의 기사 목록, 안내·오류 목록)
     """
     # 웹 서버의 작업 스레드에서 불리므로 여기서 새 이벤트 루프를 만들어 돌린다
     return asyncio.run(search_print_pages_async(keywords, since, until))
+
+
+def add_search_page_articles(found, page_items, since, until, known_keys, keyword_hits, new_articles):
+    """
+    검색 화면에서만 보인 기사(링크가 API 목록에 없는 기사)를 목록에 더한다. 중복은 URL로 가린다.
+    날짜·언론사·지면·제목·URL은 검색 화면 그대로, 게재일시는 그날 00:00:00, 영상 여부는 확인하지 않는다.
+    반환: 새로 더한 기사 수
+    """
+    seen = set()
+    for article in found.values():
+        seen.update(normalize_url(link) for link in (article.get("original_link"), article.get("naver_link")) if link)
+
+    added = 0
+    for item in page_items:
+        if not (since.astimezone(KST).date() <= item["date"].date()
+                and (until is None or item["date"] < until.astimezone(KST))):
+            continue
+        is_naver = is_naver_news_link(item["url"])
+        key = item["url"]
+        keyword_hits.append((key, item["keyword"]))
+        if normalize_url(item["url"]) in seen:
+            continue
+        seen.add(normalize_url(item["url"]))
+        if key in known_keys:
+            continue
+        new_articles.append({
+            "title": item["title"], "description": "", "press": item["press"],
+            "print_page": item["print_page"], "has_video": False,
+            "naver_link": item["url"] if is_naver else "", "original_link": item["url"],
+            "published_at": item["date"].isoformat(timespec="seconds"), "source": "search",
+        })
+        added += 1
+    return added
 
 
 def find_print_page_for(article, print_pages):
@@ -535,11 +617,10 @@ def find_print_page_for(article, print_pages):
 # 전체 수집
 # =========================================================
 
-def collect(keywords, since, until=None, known_keys=None, known_print=None):
+def collect(keywords, since, until=None, known_keys=None):
     """
     키워드 목록으로 since ~ until 사이에 발행된 기사를 모은다. (until이 없으면 지금까지)
-    known_keys에 있는 기사(이미 DB에 있는 기사)는 페이지 보강을 건너뛰고,
-    known_print에 있는 기사(지면이 이미 확인된 기사)만 있으면 지면 확인도 건너뛴다.
+    known_keys에 있는 기사(이미 DB에 있는 기사)는 페이지 보강을 건너뛴다.
     반환: (새 기사 목록, 이미 있던 기사의 (key, keyword) 목록, 오류·안내 목록, {기사 key: 지면})
     """
     known_keys = known_keys or set()
@@ -566,23 +647,26 @@ def collect(keywords, since, until=None, known_keys=None, known_print=None):
     new_articles = [a for k, a in found.items() if k not in known_keys]
     enrich_articles(new_articles)
 
-    # 검색 결과 화면의 지면 표시로 기간 안 모든 기사(이미 DB에 있던 기사 포함)의 지면을 찾는다
+    # 네이버 검색 화면을 기간 끝까지 내려 (1) 기사마다 지면을 찾고
+    # (2) API 목록에 없는 기사를 더한다. API는 기간과 상관없이 키워드당 최신 1,100건까지만 주므로
+    #     긴 기간이나 오래전 기간은 검색 화면에서만 찾을 수 있다
     print_updates = {}
-    # 이미 지면이 확인된 기사는 다시 찾을 필요가 없다. 확인할 기사가 없으면 브라우저를 열지 않는다
-    known_print = known_print or set()
-    if any(key not in known_print for key in found):
-        try:
-            print_pages, print_errors = search_print_pages(keywords, since, until)
-            errors.extend(print_errors)
-            for key, article in found.items():
-                page = find_print_page_for(article, print_pages)
-                if page:
-                    print_updates[key] = page
-                    if key not in known_keys and article.get("print_page", "온라인") == "온라인":
-                        article["print_page"] = page
-            shown = sum(1 for k in print_pages if not k.startswith("제목:"))
-            errors.append(f"[안내] 지면 표시 {shown}건 중 이번 목록 기사와 맞춘 것 {len(print_updates)}건")
-        except Exception as error:
-            errors.append(f"지면 확인을 하지 못했습니다: {error}")
+    try:
+        print_pages, page_items, print_errors = search_print_pages(keywords, since, until)
+        errors.extend(print_errors)
+        for key, article in found.items():
+            page = find_print_page_for(article, print_pages)
+            if page:
+                print_updates[key] = page
+                if key not in known_keys and article.get("print_page", "온라인") == "온라인":
+                    article["print_page"] = page
+        shown = sum(1 for k in print_pages if not k.startswith("제목:"))
+        errors.append(f"[안내] 지면 표시 {shown}건 중 이번 목록 기사와 맞춘 것 {len(print_updates)}건")
+
+        added = add_search_page_articles(found, page_items, since, until, known_keys, keyword_hits, new_articles)
+        if added:
+            errors.append(f"[안내] API 목록에 없어 네이버 검색 화면에서 더한 기사 {added}건 (게재시각은 00:00:00으로 표시)")
+    except Exception as error:
+        errors.append(f"지면 확인을 하지 못했습니다: {error}")
 
     return new_articles, keyword_hits, errors, print_updates
