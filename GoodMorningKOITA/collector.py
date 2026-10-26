@@ -389,7 +389,9 @@ SEARCH_PAGE_URL = "https://search.naver.com/search.naver"
 SEARCH_MAX_SCROLLS = 1000     # 키워드당 아래로 내리는 최대 횟수 (기간 기사가 다 나오면 그 전에 멈춤)
 SEARCH_SCROLL_WAIT_MS = 3000  # 내린 뒤 새 기사를 기다리는 최대 시간 (나타나면 바로 넘어감)
 SEARCH_STOP_REPEATS = 2       # 이만큼 연속으로 기다려도 안 늘어나면 끝까지 다 나온 것으로 본다
-SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]?\d{1,3})\s*면\s*\d{1,2}\s*단")
+# 지면 표시: "A16면 1단", "1면 TOP", "B2면"처럼 숫자(앞에 영문 가능) 뒤에 "면"이 붙은 것.
+# 제목·본문 요약의 "3면에서" 같은 글자와 섞이지 않도록 제목 앞(언론사·날짜 줄)에서만 찾는다
+SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]{0,2}\d{1,3})\s*면(?![가-힣])")
 SEARCH_TITLE_SELECTOR = "a[data-heatmap-target='.tit'], a.news_tit"
 
 
@@ -446,24 +448,26 @@ def parse_search_page(page_html, now=None):
         title_text = re.sub(r"새\s*창\s*열림", "", title.get_text(" ", strip=True)).strip()
         url = title.get("href") or ""
 
-        match = SEARCH_PRINT_RE.search(box_text)
-        page = f"{match.group(1).upper()}면" if match else "온라인"
-        if match:
-            pages[normalize_url(url)] = page
-            pages["제목:" + title_key(title_text)] = page
-
-        # 제목 앞에 나오는 글자 중 날짜·지면·안내 문구가 아닌 첫 번째가 언론사명
-        press = ""
+        # 제목 앞에 나오는 글자 (언론사명, 지면, 날짜 등)
         before = []
         for text in box.find_all(string=True):
             if title in text.parents:
                 break
             if text.strip():
                 before.append(text.strip())
+
+        match = SEARCH_PRINT_RE.search(" ".join(before))
+        page = f"{match.group(1).upper()}면" if match else "온라인"
+        if match:
+            pages[normalize_url(url)] = page
+            pages["제목:" + title_key(title_text)] = page
+
+        # 제목 앞 글자 중 날짜·지면·안내 문구가 아닌 첫 번째가 언론사명
+        press = ""
         for text in before:
             text = re.sub(r"\s+", " ", text)
             if (text in SEARCH_NOT_PRESS or SEARCH_DATE_RE.search(text) or SEARCH_PRINT_RE.search(text)
-                    or re.fullmatch(r"[A-Za-z]?\d+\s*면|\d+\s*단", text) or len(text) > 30):
+                    or re.fullmatch(r"\d+\s*단|TOP", text) or len(text) > 30):
                 continue
             press = text
             break
