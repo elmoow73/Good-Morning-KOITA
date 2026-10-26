@@ -330,29 +330,6 @@ def parse_original_press(page_html):
     return ""
 
 
-# 언론사 원문 페이지의 지면 표시. 언론사마다 쓰는 방식이 다르다
-#   전자신문: "지면 : 2026-10-21 2면"   한국경제: "지면A29"   여러 신문: "A12면 1단"
-ORIGINAL_PRINT_PATTERNS = [
-    r"지면\s*[:：]?\s*(?:\d{4}[-.]\s*\d{1,2}[-.]\s*\d{1,2}\.?\s*)?([A-Za-z]{0,2}\d{1,2})\s*면?(?![0-9])",
-    r"(?<![가-힣A-Za-z0-9])([A-Za-z]{0,2}\d{1,2})\s*면\s*\d{1,2}\s*단",
-]
-
-
-def parse_original_print_page(page_html):
-    """언론사 원문 페이지에서 지면(예: 'A29면')을 찾는다. 없으면 '온라인'."""
-    if not page_html:
-        return "온라인"
-    soup = BeautifulSoup(page_html, "html.parser")
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    text = soup.get_text(" ", strip=True)
-    for pattern in ORIGINAL_PRINT_PATTERNS:
-        match = re.search(pattern, text)
-        if match:
-            return f"{match.group(1).upper()}면"
-    return "온라인"
-
-
 def has_video_html(page_html):
     lowered = (page_html or "").lower()
     return any(re.search(pattern, lowered) for pattern in VIDEO_HTML_PATTERNS)
@@ -378,13 +355,6 @@ def enrich_article(article, session=None):
         original_html = fetch_html(article["original_link"], session)
         press = parse_original_press(original_html) or domain_of(article["original_link"])
 
-    # 네이버 기사 페이지에서 지면을 못 찾으면 언론사 원문 페이지에서 찾는다
-    # (뉴스 검색 API는 지면 정보를 주지 않는다)
-    if print_page == "온라인":
-        if not original_html:
-            original_html = fetch_html(article["original_link"], session)
-        print_page = parse_original_print_page(original_html)
-
     has_video = False
     if get_standard_video_media_name(press) or get_standard_video_media_name(
         press_from_domain(article["original_link"])
@@ -404,6 +374,81 @@ def enrich_articles(articles):
     with ThreadPoolExecutor(max_workers=ENRICH_WORKERS) as pool:
         list(pool.map(lambda a: enrich_article(a, session), articles))
     return articles
+
+
+# =========================================================
+# 3) 지면 표시 (네이버 뉴스 검색 결과 화면)
+# =========================================================
+#
+# 뉴스 검색 API는 지면 정보를 주지 않는다. 네이버 뉴스 검색 결과 화면에는 언론사와 상관없이
+# 기사마다 "A29면 1단" 같은 표시가 같은 형식으로 붙으므로(예전 naver_news_crawler10.py 방식),
+# 같은 키워드로 검색 결과 화면을 받아 기사 링크별 지면을 읽는다.
+
+SEARCH_PAGE_URL = "https://search.naver.com/search.naver"
+SEARCH_PAGE_SIZE = 10
+SEARCH_MAX_PAGES = 30          # 키워드당 최대 300건까지 확인
+SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]?\d{1,3})\s*면\s*\d{1,2}\s*단")
+SEARCH_TITLE_SELECTOR = "a[data-heatmap-target='.tit'], a.news_tit"
+
+
+def normalize_url(url):
+    """http/https, www., 끝의 / 차이를 무시하고 비교하려고"""
+    parsed = urlparse((url or "").strip())
+    host = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path.rstrip("/")
+    return f"{host}{path}" + (f"?{parsed.query}" if parsed.query else "")
+
+
+def parse_search_print_pages(page_html):
+    """검색 결과 화면 HTML에서 {기사 링크: 지면} 과 화면의 기사 수를 돌려준다."""
+    soup = BeautifulSoup(page_html, "html.parser")
+    titles = soup.select(SEARCH_TITLE_SELECTOR)
+    pages = {}
+    for title in titles:
+        # 제목에서 위로 올라가며 이 기사 한 건을 감싸는 가장 큰 상자를 찾는다 (다른 기사 제목이 섞이기 직전까지)
+        box = title
+        for _ in range(15):
+            parent = box.parent
+            if parent is None or len(parent.select(SEARCH_TITLE_SELECTOR)) > 1:
+                break
+            box = parent
+        match = SEARCH_PRINT_RE.search(box.get_text(" ", strip=True))
+        if match:
+            pages[normalize_url(title.get("href"))] = f"{match.group(1).upper()}면"
+    return pages, len(titles)
+
+
+def search_print_pages(keyword, since, session):
+    """키워드의 네이버 뉴스 검색 결과 화면(최신순)을 넘겨 가며 지면 기사 링크를 모은다."""
+    pages = {}
+    # 검색 결과 화면은 대략 기간으로만 거른다 (API로 받은 기사와 링크로 맞추므로 넉넉해도 된다)
+    period = f"p:from{since.strftime('%Y%m%d')}to{datetime.now(KST).strftime('%Y%m%d')}"
+    for index in range(SEARCH_MAX_PAGES):
+        response = session.get(
+            SEARCH_PAGE_URL,
+            headers=HEADERS,
+            params={"where": "news", "query": keyword, "sort": 1, "nso": f"so:dd,{period}",
+                    "start": index * SEARCH_PAGE_SIZE + 1},
+            timeout=PAGE_TIMEOUT,
+        )
+        if response.status_code != 200:
+            break
+        found, count = parse_search_print_pages(response.text)
+        pages.update(found)
+        if count < SEARCH_PAGE_SIZE:
+            break
+    return pages
+
+
+def apply_print_pages(articles, print_pages):
+    for article in articles:
+        if article.get("print_page", "온라인") != "온라인":
+            continue
+        for link in (article.get("original_link"), article.get("naver_link")):
+            page = print_pages.get(normalize_url(link)) if link else None
+            if page:
+                article["print_page"] = page
+                break
 
 
 # =========================================================
@@ -439,4 +484,15 @@ def collect(keywords, since, until=None, known_keys=None):
 
     new_articles = [a for k, a in found.items() if k not in known_keys]
     enrich_articles(new_articles)
+
+    # 네이버 기사 페이지에서 지면을 못 찾은 새 기사는 검색 결과 화면의 지면 표시로 채운다
+    if any(a.get("print_page", "온라인") == "온라인" for a in new_articles):
+        print_pages = {}
+        for keyword in keywords:
+            try:
+                print_pages.update(search_print_pages(keyword, since, session))
+            except requests.RequestException as error:
+                errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 받지 못했습니다: {error}")
+        apply_print_pages(new_articles, print_pages)
+
     return new_articles, keyword_hits, errors
