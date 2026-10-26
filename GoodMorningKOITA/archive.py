@@ -13,7 +13,6 @@
 import csv
 import json
 import os
-import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -69,18 +68,9 @@ def connect():
         conn.close()
 
 
-def title_key(title):
-    """띄어쓰기·기호를 뺀 제목. 같은 기사가 URL만 다르게 들어오는 경우를 잡으려고"""
-    return re.sub(r"[^0-9a-z가-힣]", "", (title or "").lower())
-
-
 def duplicate_keys(row):
-    """
-    이 키 중 하나라도 같으면 같은 기사(행)로 본다.
-    - 엑셀과 같은 기준: 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)
-    - 추가: 날짜·언론사·구분이 같고 띄어쓰기·기호를 뺀 제목이 같으면 URL이 달라도 같은 기사
-    """
-    return {row["row_key"], "|".join(("t", row["date"], row["press"], row["type"], title_key(row["title"])))}
+    """중복 기준은 엑셀과 같다: 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)"""
+    return {row["row_key"]}
 
 
 def sort_key(row):
