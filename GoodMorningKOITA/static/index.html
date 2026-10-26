@@ -243,14 +243,14 @@ function keywordsOf(a) {
   return (a.keywords || "").split(", ").map(k => k.replaceAll('"', "").trim()).filter(Boolean);
 }
 
-// 지금 목록에 있는 언론사·키워드로 선택 목록을 만든다 (많은 순, 건수 표시)
+// 지금 목록에 있는 언론사·키워드로 선택 목록을 만든다 (가나다순, 건수 표시)
 function fillFilterOptions() {
   const fill = (id, allLabel, values) => {
     const select = $(id);
     const current = select.value;
     const counts = new Map();
     for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
-    const items = [...counts].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], "ko"));
+    const items = [...counts].sort((x, y) => x[0].localeCompare(y[0], "ko"));
     select.innerHTML = `<option value="">${allLabel}</option>` +
       items.map(([v, n]) => `<option value="${esc(v)}">${esc(v)} (${n})</option>`).join("");
     // 고른 값이 목록에서 사라졌으면 전체로
