@@ -292,7 +292,8 @@ function renderArticles() {
       <td>
         ${a.print_page !== "온라인"
           ? `<span class="badge print" data-print="${a.id}" title="클릭해서 지면 수정">지면 ${esc(a.print_page)}</span>`
-          : `<span class="badge online" data-print="${a.id}" title="클릭해서 지면 입력">온라인</span>`}
+          : ""}
+        <span class="badge online" data-print="${a.id}" title="클릭해서 지면 입력·수정">온라인</span>
         ${a.has_video ? `<span class="badge video" data-video="${a.id}" title="클릭해서 영상 표시 해제">영상</span>` : ""}
         ${a.archived ? `<span class="badge saved" title="DB에 이미 저장된 기사">저장됨</span>` : ""}
       </td>
@@ -426,7 +427,7 @@ $("btn-archive").addEventListener("click", async () => {
     let message = `DB에 ${r.added}행을 추가했습니다.`;
     if (r.skipped) message += ` (이미 있던 ${r.skipped}행은 건너뜀)`;
     if (r.removed) message += `\n예전에 들어간 중복 ${r.removed}행도 정리했습니다.`;
-    message += `\nDB는 기사 날짜 최신순으로 정렬됐습니다.`;
+    message += `\nDB는 게재일시 최신순으로 정렬됐습니다.`;
     message += `\nDB 누적 ${r.total}행`;
     if (r.warnings.length) message += `\n\n${r.warnings.join("\n")}`;
     alert(message);

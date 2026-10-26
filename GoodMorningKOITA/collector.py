@@ -386,8 +386,8 @@ def enrich_articles(articles):
 
 SEARCH_PAGE_URL = "https://search.naver.com/search.naver"
 SEARCH_MAX_SCROLLS = 200      # 키워드당 아래로 내리는 최대 횟수 (기간 기사가 다 나오면 그 전에 멈춤)
-SEARCH_SCROLL_WAIT_MS = 2500  # 내린 뒤 다음 기사가 불러와지길 기다리는 시간
-SEARCH_STOP_REPEATS = 4       # 이만큼 연속으로 기사 수가 그대로면 끝까지 다 나온 것으로 본다
+SEARCH_SCROLL_WAIT_MS = 3000  # 내린 뒤 새 기사를 기다리는 최대 시간 (나타나면 바로 넘어감)
+SEARCH_STOP_REPEATS = 2       # 이만큼 연속으로 기다려도 안 늘어나면 끝까지 다 나온 것으로 본다
 SEARCH_PRINT_RE = re.compile(r"(?<![가-힣A-Za-z0-9])([A-Za-z]?\d{1,3})\s*면\s*\d{1,2}\s*단")
 SEARCH_TITLE_SELECTOR = "a[data-heatmap-target='.tit'], a.news_tit"
 
@@ -445,7 +445,7 @@ def open_browser(playwright):
 
 def search_print_pages(keywords, since, until=None):
     """
-    키워드마다 네이버 뉴스 검색 결과 화면(최신순)을 브라우저로 열어 지면 기사 링크를 모은다.
+    키워드를 OR로 묶은 네이버 뉴스 검색 결과 화면(최신순)을 브라우저로 열어 지면 기사 링크를 모은다.
     검색 화면은 자바스크립트로 기사 목록을 그리므로 HTML만 받아서는 읽을 수 없다. (예전 크롤러와 같은 방식)
     화면에서 검색한 기간과 똑같은 기간으로 네이버를 검색하고, 그 기간 기사가 끝까지 나올 때까지 내린다.
     반환: ({기사 링크: 지면}, 안내·오류 목록)
@@ -455,35 +455,45 @@ def search_print_pages(keywords, since, until=None):
     # until은 끝 날짜 다음 날 0시이므로 1초 빼서 끝 날짜로
     last_day = (until - timedelta(seconds=1)) if until else datetime.now(KST)
     period = f"p:from{since.astimezone(KST).strftime('%Y%m%d')}to{last_day.astimezone(KST).strftime('%Y%m%d')}"
+    # 키워드를 '|'(네이버 검색의 OR)로 묶어 한 번만 검색한다. 키워드마다 따로 내리면 5배 걸린다
+    query = " | ".join(keywords)
     pages, errors = {}, []
     with sync_playwright() as playwright:
         browser = open_browser(playwright)
         page = browser.new_page(user_agent=HEADERS["User-Agent"], locale="ko-KR")
-        for keyword in keywords:
+        try:
+            page.goto(
+                f"{SEARCH_PAGE_URL}?ssc=tab.news.all&where=news&query={quote(query)}"
+                f"&sm=tab_opt&sort=1&nso={quote('so:dd,' + period)}",
+                wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000,
+            )
             try:
-                page.goto(
-                    f"{SEARCH_PAGE_URL}?ssc=tab.news.all&where=news&query={quote(keyword)}"
-                    f"&sm=tab_opt&sort=1&nso={quote('so:dd,' + period)}",
-                    wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000,
-                )
-                page.wait_for_timeout(SEARCH_SCROLL_WAIT_MS)
-                # 아래로 내려야 기사가 더 나온다. 맨 아래로 이동하고 기다리기를 반복해
-                # 기사 수가 SEARCH_STOP_REPEATS번 연속 그대로면 기간 기사가 다 나온 것으로 본다
-                count, same = page.locator(SEARCH_TITLE_SELECTOR).count(), 0
-                for _ in range(SEARCH_MAX_SCROLLS):
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.keyboard.press("End")
-                    page.wait_for_timeout(SEARCH_SCROLL_WAIT_MS)
-                    current = page.locator(SEARCH_TITLE_SELECTOR).count()
-                    same = same + 1 if current == count else 0
-                    count = current
+                page.wait_for_selector(SEARCH_TITLE_SELECTOR, timeout=SEARCH_SCROLL_WAIT_MS * 2)
+            except Exception:
+                pass  # 기간에 기사가 없으면 제목이 안 나온다
+            # 맨 아래로 내리고, 새 기사가 나타나면 바로 다음으로 넘어간다.
+            # 기다려도 안 늘어나는 일이 SEARCH_STOP_REPEATS번 연속이면 기간 기사가 다 나온 것으로 본다
+            count, same = page.locator(SEARCH_TITLE_SELECTOR).count(), 0
+            for _ in range(SEARCH_MAX_SCROLLS):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.keyboard.press("End")
+                try:
+                    page.wait_for_function(
+                        "([selector, before]) => document.querySelectorAll(selector).length > before",
+                        arg=[SEARCH_TITLE_SELECTOR, count], timeout=SEARCH_SCROLL_WAIT_MS,
+                    )
+                    same = 0
+                except Exception:
+                    same += 1
                     if same >= SEARCH_STOP_REPEATS:
                         break
-                found, shown = parse_search_print_pages(page.content())
-                pages.update(found)
-                errors.append(f"[안내] [{keyword}] 네이버 검색 화면 기사 {shown}건 확인, 그중 지면 {sum(1 for k in found if not k.startswith("제목:"))}건")
-            except Exception as error:
-                errors.append(f"[{keyword}] 지면 확인용 네이버 검색 화면을 읽지 못했습니다: {error}")
+                count = page.locator(SEARCH_TITLE_SELECTOR).count()
+            found, shown = parse_search_print_pages(page.content())
+            pages.update(found)
+            errors.append(f"[안내] 네이버 검색 화면 기사 {shown}건 확인, "
+                          f"그중 지면 {sum(1 for k in found if not k.startswith('제목:'))}건")
+        except Exception as error:
+            errors.append(f"지면 확인용 네이버 검색 화면을 읽지 못했습니다: {error}")
         browser.close()
     return pages, errors
 
@@ -500,10 +510,11 @@ def find_print_page_for(article, print_pages):
 # 전체 수집
 # =========================================================
 
-def collect(keywords, since, until=None, known_keys=None):
+def collect(keywords, since, until=None, known_keys=None, known_print=None):
     """
     키워드 목록으로 since ~ until 사이에 발행된 기사를 모은다. (until이 없으면 지금까지)
-    known_keys에 있는 기사(이미 DB에 있는 기사)는 페이지 보강을 건너뛴다.
+    known_keys에 있는 기사(이미 DB에 있는 기사)는 페이지 보강을 건너뛰고,
+    known_print에 있는 기사(지면이 이미 확인된 기사)만 있으면 지면 확인도 건너뛴다.
     반환: (새 기사 목록, 이미 있던 기사의 (key, keyword) 목록, 오류·안내 목록, {기사 key: 지면})
     """
     known_keys = known_keys or set()
@@ -532,7 +543,9 @@ def collect(keywords, since, until=None, known_keys=None):
 
     # 검색 결과 화면의 지면 표시로 기간 안 모든 기사(이미 DB에 있던 기사 포함)의 지면을 찾는다
     print_updates = {}
-    if found:
+    # 이미 지면이 확인된 기사는 다시 찾을 필요가 없다. 확인할 기사가 없으면 브라우저를 열지 않는다
+    known_print = known_print or set()
+    if any(key not in known_print for key in found):
         try:
             print_pages, print_errors = search_print_pages(keywords, since, until)
             errors.extend(print_errors)

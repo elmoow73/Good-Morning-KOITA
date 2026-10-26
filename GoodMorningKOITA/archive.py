@@ -2,7 +2,7 @@
 기사 DB: 화면에서 체크한 기사를 엑셀과 같은 행 형태로 계속 쌓아 두는 별도 저장소
 
 다른 프로그램이 읽어 가도록 database/ 폴더에 같은 내용을 세 가지 형식으로 둔다.
-- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 기사 날짜 최신순으로 다시 정렬한다
+- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 게재일시 최신순으로 다시 정렬한다
 - koita_news.csv    : 저장할 때마다 원본에서 다시 만드는 사본 (엑셀·메모장 등 어디서나 열림)
 - koita_news.json   : 저장할 때마다 원본에서 다시 만드는 사본 (웹·스크립트용)
 
@@ -75,8 +75,8 @@ def duplicate_keys(row):
 
 
 def sort_key(row):
-    """기사 날짜 최신순 (엑셀과 같음). 같은 날짜는 지면 → 방송 → 온라인, 그다음 게재 시각 최신순"""
-    return (row["date"], -exporter.type_order({"구분": row["type"]}), row["published_at"], row["title"])
+    """게재일시(published_at) 최신순. 같은 기사의 행은 지면 → 방송 → 온라인"""
+    return (row["published_at"], -exporter.type_order({"구분": row["type"]}), row["title"])
 
 
 def rewrite(conn, rows):

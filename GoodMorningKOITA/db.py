@@ -120,6 +120,12 @@ def known_article_keys():
         return {r[0] for r in conn.execute("SELECT article_key FROM articles")}
 
 
+def print_article_keys():
+    """지면이 이미 확인된 기사"""
+    with connect() as conn:
+        return {r[0] for r in conn.execute("SELECT article_key FROM articles WHERE print_page != '온라인'")}
+
+
 def save_articles(new_articles, keyword_hits):
     """새 기사를 저장하고, 기사-키워드 연결을 기록한다. 저장된 새 기사 수를 돌려준다."""
     collected_at = now_iso()
