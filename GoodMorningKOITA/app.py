@@ -33,6 +33,7 @@ app = FastAPI(title="GoodMorningKOITA", version=VERSION)
 collect_lock = threading.Lock()
 archive_lock = threading.Lock()
 db.init_db()
+archive.tidy()
 app.middleware("http")(auth.require_login)
 
 

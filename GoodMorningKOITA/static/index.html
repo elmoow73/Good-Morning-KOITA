@@ -425,6 +425,8 @@ $("btn-archive").addEventListener("click", async () => {
     showArchiveInfo((await api("/api/status")).archive);
     let message = `DB에 ${r.added}행을 추가했습니다.`;
     if (r.skipped) message += ` (이미 있던 ${r.skipped}행은 건너뜀)`;
+    if (r.removed) message += `\n예전에 들어간 중복 ${r.removed}행도 정리했습니다.`;
+    message += `\nDB는 기사 날짜 최신순으로 정렬됐습니다.`;
     message += `\nDB 누적 ${r.total}행`;
     if (r.warnings.length) message += `\n\n${r.warnings.join("\n")}`;
     alert(message);

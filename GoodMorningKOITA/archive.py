@@ -2,7 +2,7 @@
 기사 DB: 화면에서 체크한 기사를 엑셀과 같은 행 형태로 계속 쌓아 두는 별도 저장소
 
 다른 프로그램이 읽어 가도록 database/ 폴더에 같은 내용을 세 가지 형식으로 둔다.
-- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 한다
+- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 기사 날짜 최신순으로 다시 정렬한다
 - koita_news.csv    : 저장할 때마다 원본에서 다시 만드는 사본 (엑셀·메모장 등 어디서나 열림)
 - koita_news.json   : 저장할 때마다 원본에서 다시 만드는 사본 (웹·스크립트용)
 
@@ -13,6 +13,7 @@
 import csv
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -68,32 +69,92 @@ def connect():
         conn.close()
 
 
+def title_key(title):
+    """띄어쓰기·기호를 뺀 제목. 같은 기사가 URL만 다르게 들어오는 경우를 잡으려고"""
+    return re.sub(r"[^0-9a-z가-힣]", "", (title or "").lower())
+
+
+def duplicate_keys(row):
+    """
+    이 키 중 하나라도 같으면 같은 기사(행)로 본다.
+    - 엑셀과 같은 기준: 온라인·방송은 (URL, 구분), 지면은 (날짜, 언론사명, 구분, 제목)
+    - 추가: 날짜·언론사·구분이 같고 띄어쓰기·기호를 뺀 제목이 같으면 URL이 달라도 같은 기사
+    """
+    return {row["row_key"], "|".join(("t", row["date"], row["press"], row["type"], title_key(row["title"])))}
+
+
+def sort_key(row):
+    """기사 날짜 최신순 (엑셀과 같음). 같은 날짜는 지면 → 방송 → 온라인, 그다음 게재 시각 최신순"""
+    return (row["date"], -exporter.type_order({"구분": row["type"]}), row["published_at"], row["title"])
+
+
+def rewrite(conn, rows):
+    """
+    중복을 지우고 기사 날짜순으로 정렬해서 표를 다시 쓴다. 연번(seq)은 정렬된 순서대로 1부터 다시 매긴다.
+    rows는 먼저 저장된 것부터 들어 있어야 한다 (중복이면 먼저 저장된 행을 남긴다).
+    반환: 남은 행 목록
+    """
+    seen = set()
+    kept = []
+    for row in rows:
+        keys = duplicate_keys(row)
+        if keys & seen:
+            continue
+        seen |= keys
+        kept.append(row)
+    kept.sort(key=sort_key, reverse=True)
+
+    names = [name for name, _ in COLUMNS if name != "seq"] + ["row_key"]
+    conn.execute("DELETE FROM news")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name = 'news'")
+    conn.executemany(
+        f"INSERT INTO news (seq, {', '.join(names)}) VALUES ({', '.join('?' * (len(names) + 1))})",
+        [(seq, *(row[n] for n in names)) for seq, row in enumerate(kept, start=1)],
+    )
+    return kept
+
+
+def stored_rows(conn):
+    # 저장일시, 예전 연번 순 = 먼저 저장된 순
+    return [dict(r) for r in conn.execute("SELECT * FROM news ORDER BY saved_at, seq")]
+
+
 def save(articles):
     """
-    기사들을 엑셀 행으로 바꿔 DB 맨 아래에 붙인다. 이미 있는 행은 건너뛴다.
-    반환: {"added", "skipped", "total", "warnings"}
+    기사들을 엑셀 행으로 바꿔 DB에 더한다. 이미 있는 기사는 건너뛰고, 전체를 기사 날짜순으로 다시 정렬한다.
+    반환: {"added", "skipped", "removed", "total", "warnings"}
     """
-    rows = exporter.to_rows(articles)
-    # 아래로 쌓이므로 한 번에 저장하는 묶음 안에서도 오래된 것부터
-    rows.sort(key=lambda r: (r["날짜"], exporter.type_order(r), r["게재일시"]))
     saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    new_rows = [
+        {
+            "date": r["날짜"].rstrip(".").replace(".", "-"), "press": r["언론사명"], "type": r["구분"],
+            "title": r["제목"], "url": r["URL"], "published_at": r["게재일시"],
+            "keywords": r["키워드"].replace('"', ""), "saved_at": saved_at, "row_key": exporter.row_key(r),
+        }
+        for r in exporter.to_rows(articles)
+    ]
 
-    added = 0
     with connect() as conn:
-        for r in rows:
-            cursor = conn.execute(
-                """INSERT OR IGNORE INTO news
-                   (date, press, type, title, url, published_at, keywords, saved_at, row_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    r["날짜"].rstrip(".").replace(".", "-"), r["언론사명"], r["구분"], r["제목"], r["URL"],
-                    r["게재일시"], r["키워드"].replace('"', ""), saved_at, exporter.row_key(r),
-                ),
-            )
-            added += cursor.rowcount
-        total = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
+        existing = stored_rows(conn)
+        before = len(rewrite(conn, existing))  # 예전부터 있던 중복도 이번에 정리된다
+        total = len(rewrite(conn, existing + new_rows))
 
-    return {"added": added, "skipped": len(rows) - added, "total": total, "warnings": write_copies()}
+    added = total - before
+    return {
+        "added": added, "skipped": len(new_rows) - added, "removed": len(existing) - before,
+        "total": total, "warnings": write_copies(),
+    }
+
+
+def tidy():
+    """프로그램을 켤 때 예전 DB의 중복을 정리하고 날짜순으로 맞춘다. 정리한 행 수를 돌려준다."""
+    with connect() as conn:
+        existing = stored_rows(conn)
+        if not existing:
+            return 0
+        removed = len(existing) - len(rewrite(conn, existing))
+    write_copies()
+    return removed
 
 
 def all_rows():
