@@ -330,6 +330,29 @@ def parse_original_press(page_html):
     return ""
 
 
+# 언론사 원문 페이지의 지면 표시. 언론사마다 쓰는 방식이 다르다
+#   전자신문: "지면 : 2026-10-21 2면"   한국경제: "지면A29"   여러 신문: "A12면 1단"
+ORIGINAL_PRINT_PATTERNS = [
+    r"지면\s*[:：]?\s*(?:\d{4}[-.]\s*\d{1,2}[-.]\s*\d{1,2}\.?\s*)?([A-Za-z]{0,2}\d{1,2})\s*면?(?![0-9])",
+    r"(?<![가-힣A-Za-z0-9])([A-Za-z]{0,2}\d{1,2})\s*면\s*\d{1,2}\s*단",
+]
+
+
+def parse_original_print_page(page_html):
+    """언론사 원문 페이지에서 지면(예: 'A29면')을 찾는다. 없으면 '온라인'."""
+    if not page_html:
+        return "온라인"
+    soup = BeautifulSoup(page_html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    text = soup.get_text(" ", strip=True)
+    for pattern in ORIGINAL_PRINT_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            return f"{match.group(1).upper()}면"
+    return "온라인"
+
+
 def has_video_html(page_html):
     lowered = (page_html or "").lower()
     return any(re.search(pattern, lowered) for pattern in VIDEO_HTML_PATTERNS)
@@ -354,6 +377,13 @@ def enrich_article(article, session=None):
     if not press:
         original_html = fetch_html(article["original_link"], session)
         press = parse_original_press(original_html) or domain_of(article["original_link"])
+
+    # 네이버 기사 페이지에서 지면을 못 찾으면 언론사 원문 페이지에서 찾는다
+    # (뉴스 검색 API는 지면 정보를 주지 않는다)
+    if print_page == "온라인":
+        if not original_html:
+            original_html = fetch_html(article["original_link"], session)
+        print_page = parse_original_print_page(original_html)
 
     has_video = False
     if get_standard_video_media_name(press) or get_standard_video_media_name(
