@@ -19,6 +19,8 @@
 - **PC**: 크롬·엣지 주소창 오른쪽의 설치 아이콘(⊕)을 누르면 별도 앱 창으로 열립니다.
 - 앱 설치는 `https://` 주소(또는 내 PC의 `127.0.0.1`)에서만 됩니다.
 
+**Oracle Cloud 무료 서버에 올리는 방법은 [deploy/README.md](deploy/README.md)에 단계별로 있습니다** (설치 스크립트 한 줄, HTTPS 자동, 구글 드라이브 자동 백업).
+
 ### 클라우드 서버에서 실행 (Docker)
 
 ```
@@ -104,3 +106,4 @@ DB는 저장할 때마다 게재일시(published_at) 최신순(같은 기사의 
 | `static/index.html` | 화면 |
 | `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | 앱 설치(PWA) |
 | `Dockerfile` | 클라우드 서버용 실행 이미지 |
+| `deploy/` | 서버 설치·업데이트(`setup.sh`), 구글 드라이브 백업(`backup.sh`), HTTPS(Caddy) 구성 |

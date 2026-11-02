@@ -12,6 +12,7 @@
 - 클라우드 서버용 설정 추가 (모두 선택, 비우면 예전과 같음): `DATA_DIR`(news.db·database 위치), `HOST`·`PORT`, `OPEN_BROWSER`, `SESSION_SECRET`(재시작해도 로그인 유지)
 - `GET /healthz`: 로그인 없이 부르는 상태 확인 JSON (`{"ok": true, "version": "..."}`, 문제 있으면 503)
 - `Dockerfile` 추가 (크로미움·한글 글꼴 포함, 데이터는 `/data`)
+- `deploy/`: Oracle Cloud 무료 서버 설치·업데이트 스크립트 `setup.sh`(Docker 설치, 방화벽, `.env`, sslip.io 주소 + Caddy HTTPS 자동, 결과 JSON·종료 코드), 구글 드라이브 백업 `backup.sh`(rclone, SQLite 일관 사본, 최신 + 날짜별 30일, cron 등록)
 - 폰 화면에서 기사 표가 넘치면 가로 스크롤, 긴 오류 문구 줄바꿈
 
 ## v1.2.0 (2026-10-26)
