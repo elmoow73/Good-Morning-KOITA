@@ -4,6 +4,7 @@ GoodMorningKOITA 웹 서버
 실행: python app.py  →  브라우저에서 http://127.0.0.1:8000
 """
 
+import os
 import threading
 import webbrowser
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
@@ -45,6 +46,39 @@ def login_form():
 @app.post("/login")
 async def login_submit(request: Request):
     return await auth.login(request)
+
+
+# ---------------- 앱 설치(PWA)·상태 확인 ----------------
+
+@app.get("/healthz")
+def healthz():
+    """로그인 없이 부르는 상태 확인 (클라우드 서버·모니터링·AI 에이전트용). 정상이면 200"""
+    try:
+        with db.connect() as conn:
+            conn.execute("SELECT 1")
+    except Exception as exc:
+        return JSONResponse({"ok": False, "version": VERSION, "error": str(exc)}, status_code=503)
+    return {"ok": True, "version": VERSION}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(BASE_DIR / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    # 서비스 워커는 앱 전체(/)를 맡도록 최상위 주소에서 내려준다
+    return FileResponse(BASE_DIR / "static" / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/icons/{name}")
+def icon(name: str):
+    path = BASE_DIR / "static" / "icons" / Path(name).name
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/")
@@ -238,5 +272,10 @@ def xlsx_response(articles):
 if __name__ == "__main__":
     import uvicorn
 
-    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # .env의 HOST·PORT로 바꿀 수 있다. 클라우드 서버에서는 HOST=0.0.0.0
+    host = os.getenv("HOST", "").strip() or "127.0.0.1"
+    port = int(os.getenv("PORT", "").strip() or 8000)
+    # 내 PC에서 켤 때만 브라우저를 자동으로 연다 (OPEN_BROWSER=0이면 안 연다)
+    if os.getenv("OPEN_BROWSER", "").strip() != "0" and host in ("127.0.0.1", "localhost"):
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")

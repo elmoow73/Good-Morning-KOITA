@@ -21,8 +21,12 @@ from pathlib import Path
 
 import exporter
 
-# .env의 ARCHIVE_DIR로 다른 폴더(예: 공유 폴더)를 지정할 수 있다
-ARCHIVE_DIR = Path(os.getenv("ARCHIVE_DIR", "").strip() or Path(__file__).with_name("database"))
+# .env의 ARCHIVE_DIR로 다른 폴더(예: 공유 폴더)를 지정할 수 있다.
+# 없으면 DATA_DIR/database, DATA_DIR도 없으면 프로그램 폴더의 database
+ARCHIVE_DIR = Path(
+    os.getenv("ARCHIVE_DIR", "").strip()
+    or Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).parent) / "database"
+)
 SQLITE_PATH = ARCHIVE_DIR / "koita_news.sqlite"
 CSV_PATH = ARCHIVE_DIR / "koita_news.csv"
 JSON_PATH = ARCHIVE_DIR / "koita_news.json"

@@ -1,11 +1,14 @@
 """SQLite 저장소: 키워드, 기사, 수집 기록"""
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).with_name("news.db")
+# .env의 DATA_DIR로 데이터 폴더를 옮길 수 있다 (클라우드 서버에서는 디스크를 붙인 /data 등)
+DATA_DIR = Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).parent)
+DB_PATH = DATA_DIR / "news.db"
 
 # 기본 키워드. 하나라도 들어간 기사를 모두 모은다(OR). 따옴표는 정확히 일치하는 기사 위주로 검색
 DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협회"', '"산기협"', '"장영실상"', '"엔지니어상"']
@@ -72,6 +75,7 @@ def connect():
 
 
 def init_db():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
         if conn.execute("PRAGMA user_version").fetchone()[0] < 1:

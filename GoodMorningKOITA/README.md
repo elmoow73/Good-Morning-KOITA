@@ -11,6 +11,36 @@
 
 네이버 API 키는 `.env` 파일에 들어 있습니다. NAVER API HUB(네이버 클라우드 플랫폼 콘솔)의 Application 인증 정보(Client ID / Client Secret)를 넣으면 되고, 키를 바꾸면 이 파일만 고치면 됩니다.
 
+## 폰·PC에 앱으로 설치 (v1.3.0~)
+
+서버를 클라우드에 올려 두면 PC가 꺼져 있어도 폰과 PC에서 같은 화면을 쓸 수 있습니다.
+
+- **안드로이드**: 크롬으로 서버 주소를 열고 메뉴 → "홈 화면에 추가"(또는 "앱 설치").
+- **PC**: 크롬·엣지 주소창 오른쪽의 설치 아이콘(⊕)을 누르면 별도 앱 창으로 열립니다.
+- 앱 설치는 `https://` 주소(또는 내 PC의 `127.0.0.1`)에서만 됩니다.
+
+### 클라우드 서버에서 실행 (Docker)
+
+```
+docker build -t goodmorningkoita .
+docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-file .env goodmorningkoita
+```
+
+클라우드에 올릴 때 `.env`에 꼭 넣을 것: `APP_PASSWORD`(로그인 비밀번호), `SESSION_SECRET`(아무 긴 문자열). 이미지 안에서는 `DATA_DIR=/data`, `HOST=0.0.0.0`이 기본이라 검색 결과와 기사 DB가 `/data` 디스크에 남습니다.
+
+서버가 살아 있는지는 로그인 없이 `GET /healthz`로 확인합니다 (`{"ok": true, "version": "1.3.0"}`, 문제가 있으면 HTTP 503).
+
+### 설정값 (`.env`, 모두 선택)
+
+| 이름 | 기본값 | 내용 |
+|---|---|---|
+| `APP_PASSWORD` | 없음(로그인 없음) | 넣으면 모든 화면·API에 로그인 필요 |
+| `SESSION_SECRET` | 켤 때마다 새로 만듦 | 넣으면 서버를 다시 켜도 로그인 유지 |
+| `DATA_DIR` | 프로그램 폴더 | `news.db`와 `database` 폴더를 둘 곳 |
+| `ARCHIVE_DIR` | `DATA_DIR/database` | 기사 DB 폴더만 따로 지정 |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | 서버 주소·포트 |
+| `OPEN_BROWSER` | 켬 | `0`이면 실행할 때 브라우저를 열지 않음 |
+
 ## 화면에서 할 수 있는 일
 
 - **첫 화면을 열면** 켜져 있는 키워드로 어제 0시부터의 기사를 자동 검색해 목록에 보여주고 DB에 저장합니다.
@@ -72,3 +102,5 @@ DB는 저장할 때마다 게재일시(published_at) 최신순(같은 기사의 
 | `archive.py` | 기사 DB 저장 (`database` 폴더) |
 | `exporter.py` | 엑셀 만들기 |
 | `static/index.html` | 화면 |
+| `static/manifest.webmanifest`, `static/sw.js`, `static/icons/` | 앱 설치(PWA) |
+| `Dockerfile` | 클라우드 서버용 실행 이미지 |
