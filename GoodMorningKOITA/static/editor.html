@@ -103,6 +103,9 @@
   <span class="sep"></span>
   <button id="btn-add" title="맨 위에 빈 행 추가">행 추가</button>
   <button id="btn-delete" title="왼쪽 칸을 체크한 행을 삭제 표시 (저장할 때 지워짐). 다시 누르면 취소">체크한 행 삭제</button>
+  <select id="bulk-category" class="tool" title="왼쪽 칸을 체크한 행들의 분류를 한 번에 바꾸기 (저장해야 반영)">
+    <option value="" disabled selected>체크한 행 분류</option>
+  </select>
   <button id="btn-undo" title="저장하지 않은 수정을 모두 되돌리기">수정 모두 취소</button>
   <span class="sep"></span>
   <button id="btn-import" title="엑셀에서 복사한 여러 행(머리글 포함)이나 CSV 파일을 새 행으로 넣기">붙여넣어 가져오기</button>
@@ -227,6 +230,7 @@ const changedCount = () => rows.filter(rowChanged).length;
 function load(data) {
   revision = data.revision;
   categories = data.categories;
+  fillBulkCategory();
   rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
   problems.clear();
   render();
@@ -421,6 +425,21 @@ $("btn-delete").addEventListener("click", () => {
     r.picked = false;
   }
   render();
+});
+
+// 체크한 행 분류 한 번에 바꾸기
+function fillBulkCategory() {
+  $("bulk-category").innerHTML = `<option value="" disabled selected>체크한 행 분류</option>` +
+    categories.map(c => `<option>${esc(c)}</option>`).join("") + `<option value="__clear">선택(빈 값)으로</option>`;
+}
+$("bulk-category").addEventListener("change", (e) => {
+  const value = e.target.value === "__clear" ? "" : e.target.value;
+  e.target.selectedIndex = 0;
+  const picked = rows.filter(r => r.picked && !r.deleted);
+  if (!picked.length) { alert("먼저 왼쪽 칸을 체크하세요."); return; }
+  for (const r of picked) { r.cur.category = value; problems.delete(`${r._id}:category`); }
+  render();
+  message("warn", `${picked.length}행의 분류를 '${esc(value || "선택")}'(으)로 바꿨습니다(노란 칸). <b>저장</b>을 눌러야 DB에 들어갑니다.`);
 });
 
 $("btn-undo").addEventListener("click", () => {
