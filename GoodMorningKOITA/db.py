@@ -214,6 +214,12 @@ def update_article(article_id, press=None, print_page=None, has_video=None, cate
             conn.execute("UPDATE articles SET has_video = ? WHERE id = ?", (1 if has_video else 0, article_id))
 
 
+def set_category(article_ids, category):
+    """체크한 기사 여러 개의 분류를 한 번에"""
+    with connect() as conn:
+        conn.executemany("UPDATE articles SET category = ? WHERE id = ?", [(category, i) for i in article_ids])
+
+
 def delete_article(article_id):
     with connect() as conn:
         conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))

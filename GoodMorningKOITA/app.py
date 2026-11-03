@@ -235,6 +235,22 @@ def patch_article(article_id: int, body: ArticlePatch):
     return {"ok": True}
 
 
+class CategorySelection(BaseModel):
+    ids: list[int]
+    category: str
+
+
+@app.post("/api/articles/category")
+def set_categories(body: CategorySelection):
+    """체크한 기사 여러 개의 분류를 한 번에 고른다 (빈 값 = 선택으로 되돌리기)"""
+    if body.category and body.category not in archive.CATEGORIES:
+        raise HTTPException(400, f"분류는 {', '.join(archive.CATEGORIES)} 중 하나여야 합니다.")
+    if not body.ids:
+        raise HTTPException(400, "체크한 기사가 없습니다.")
+    db.set_category(body.ids, body.category)
+    return {"ok": True, "count": len(body.ids)}
+
+
 @app.delete("/api/articles/{article_id}")
 def remove_article(article_id: int):
     db.delete_article(article_id)

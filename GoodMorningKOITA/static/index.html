@@ -97,6 +97,9 @@
   <div class="row">
     <button id="btn-export" title="체크한 기사만 엑셀로 내려받기">엑셀 다운로드</button>
     <button id="btn-archive" title="체크한 기사를 database 폴더의 DB 맨 아래에 추가 (이미 있는 기사는 건너뜀)">DB 저장</button>
+    <select id="bulk-category" title="체크한 기사들의 분류를 한 번에 고르기">
+      <option value="" disabled selected>체크한 기사 분류</option>
+    </select>
     <a class="button" href="/editor" target="_blank" title="기사 DB를 엑셀처럼 직접 고치는 창 (지면보도 날짜 확인 포함)">DB 편집</a>
     <span class="kw" id="archive-info"></span>
   </div>
@@ -299,6 +302,7 @@ function renderSelection() {
   const n = checked.size;
   $("btn-export").textContent = n ? `엑셀 다운로드 (${n})` : "엑셀 다운로드";
   $("btn-archive").textContent = n ? `DB 저장 (${n})` : "DB 저장";
+  $("bulk-category").options[0].textContent = n ? `체크한 ${n}건 분류` : "체크한 기사 분류";
   const visibleChecked = list.filter(a => checked.has(a.id)).length;
   $("check-all").checked = list.length > 0 && visibleChecked === list.length;
   $("check-all").indeterminate = visibleChecked > 0 && visibleChecked < list.length;
@@ -457,6 +461,18 @@ $("btn-export").addEventListener("click", async () => {
   } catch (err) { alert(err.message); }
 });
 
+$("bulk-category").addEventListener("change", async (e) => {
+  const value = e.target.value === "__clear" ? "" : e.target.value;
+  e.target.selectedIndex = 0;
+  const ids = checkedIds();
+  if (!ids) return;
+  try {
+    await api("/api/articles/category", { method: "POST", body: { ids, category: value } });
+    for (const a of articles) if (checked.has(a.id)) a.category = value;
+    renderArticles();
+  } catch (err) { alert(err.message); }
+});
+
 $("btn-archive").addEventListener("click", async () => {
   const ids = checkedIds();
   if (!ids) return;
@@ -502,6 +518,8 @@ for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).a
   const info = await api("/api/status");
   $("version").textContent = `v${info.version}`;
   categories = info.categories || [];
+  $("bulk-category").insertAdjacentHTML("beforeend",
+    categories.map(c => `<option>${esc(c)}</option>`).join("") + `<option value="__clear">선택으로 되돌리기</option>`);
   showArchiveInfo(info.archive);
   await collect(false);
 })();

@@ -2,9 +2,9 @@
 지면보도 날짜 확인
 
 지면 기사 파일(스크랩 이미지 등)의 파일명과 기사 DB의 지면 행을 비교해, DB의 날짜·지면이 틀린 곳을 찾는다.
-파일명 형식: [매체명]_기사제목_지면_날짜.jpg  (예: [매일경제]_산기협 장영실상 시상_A16면_20261027.jpg)
-- 매체명의 대괄호는 있어도 없어도 된다
-- 제목 안에 밑줄(_)이 있어도 된다 (첫 칸 = 매체명, 끝 칸 = 날짜, 끝에서 둘째 칸 = 지면)
+파일명 형식: [매체명] 기사제목_지면_날짜.jpg  (예: [매일경제] 산기협 장영실상 시상_A16면_20261027.jpg)
+- 끝 칸 = 날짜, 끝에서 둘째 칸 = 지면, 그 앞 전체 = "[매체명] 기사제목" (제목 안에 밑줄(_)이 있어도 된다)
+- 예전 형식 [매체명]_기사제목_지면_날짜, 매체명_기사제목_지면_날짜도 읽는다
 - 날짜는 20261027, 2026-10-27, 2026.10.27, 261027 등을 읽는다
 - 지면은 A16면, A16, 16면 등을 읽는다
 
@@ -61,6 +61,9 @@ def parse_page(text):
     return f"{match.group(1).upper()}{match.group(2)}"
 
 
+BRACKET_RE = re.compile(r"^\s*[\[【(（<〈]\s*([^\]】)）>〉]*?)\s*[\]】)）>〉]\s*(.*)$")
+
+
 def parse_filename(name):
     """
     파일명 1개를 읽는다.
@@ -70,14 +73,26 @@ def parse_filename(name):
     result = {"file": name, "press": "", "title": "", "page": None, "page_text": "", "date": None,
               "date_text": "", "errors": [], "notes": []}
     parts = [p.strip() for p in stem.split("_")]
-    if len(parts) < 4:
+    if len(parts) < 3:
         result["errors"].append({
             "part": "형식", "value": stem,
-            "message": f"밑줄(_)로 나뉜 칸이 {len(parts)}개입니다. [매체명]_기사제목_지면_날짜 4칸이 필요합니다.",
+            "message": f"밑줄(_)로 나뉜 칸이 {len(parts)}개입니다. [매체명] 기사제목_지면_날짜 3칸이 필요합니다.",
         })
         return result
 
-    result["press"] = parts[0].strip("[]【】()（）<>〈〉 ")
+    # 앞 칸 = "[매체명] 기사제목" (제목 안의 밑줄도 허용). 예전 형식 "[매체명]_제목", "매체명_제목"도 읽는다
+    head = "_".join(parts[:-2])
+    bracket = BRACKET_RE.match(head)
+    if bracket:
+        result["press"], title = bracket.group(1).strip(), bracket.group(2).strip("_ ")
+    elif len(parts) >= 4:
+        result["press"], title = parts[0], "_".join(parts[1:-2])
+    else:
+        result["errors"].append({
+            "part": "매체명", "value": head,
+            "message": "맨 앞에 [매체명]이 없습니다. [매체명] 기사제목_지면_날짜 형식으로 넣어 주세요.",
+        })
+        title = head
     page_text, date_text = parts[-2], parts[-1]
     found = parse_date(date_text)
     if found is None and parse_date(page_text) is not None and parse_page(date_text):
@@ -85,13 +100,14 @@ def parse_filename(name):
         page_text, date_text = date_text, page_text
         found = parse_date(date_text)
         result["notes"].append("지면과 날짜 칸 순서가 바뀌어 있어 바꿔 읽었습니다.")
-    result["title"] = "_".join(parts[1:-2])
+    result["title"] = title
     result["page_text"], result["date_text"] = page_text, date_text
     result["date"] = found.isoformat() if found else None
     result["page"] = parse_page(page_text)
 
     if not result["press"]:
-        result["errors"].append({"part": "매체명", "value": parts[0], "message": "매체명이 비어 있습니다."})
+        if not any(e["part"] == "매체명" for e in result["errors"]):
+            result["errors"].append({"part": "매체명", "value": head, "message": "매체명이 비어 있습니다."})
     if not norm(result["title"]):
         result["errors"].append({"part": "제목", "value": result["title"], "message": "기사제목이 비어 있습니다."})
     if found is None:
