@@ -73,6 +73,8 @@
   .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
   .badge.ok { background: var(--green-soft); color: var(--green); }
   .badge.mismatch { background: var(--red-soft); color: var(--red); }
+  .badge.suspect { background: #ffedd5; color: #c2410c; }
+  .reason { color: #c2410c; font-size: 12px; }
   .badge.parse_error, .badge.duplicate { background: var(--warn-soft); color: var(--warn); }
   .badge.no_match { background: #f1f2f4; color: var(--muted); }
   .problem b { color: var(--red); }
@@ -489,7 +491,7 @@ window.addEventListener("beforeunload", (e) => {
 // ---------------- 지면보도 날짜 확인 ----------------
 
 const STATUS = {
-  mismatch: "틀림", parse_error: "파일명 오류", no_match: "DB에 없음", duplicate: "중복 파일", ok: "일치",
+  mismatch: "틀림", suspect: "일치 의심", parse_error: "파일명 오류", no_match: "DB에 없음", duplicate: "중복 파일", ok: "일치",
 };
 
 function remember(key, value) { try { localStorage.setItem(key, value); } catch {} }
@@ -527,7 +529,10 @@ async function runCheck(source) {
     .map(r => ({ seq: r._id, date: r.cur.date, press: r.cur.press, type: r.cur.type, title: r.cur.title }));
   try {
     checkResult = await api("/api/print-check", { method: "POST", body: { ...source, rows: current } });
-    checkTab = checkResult.summary.mismatch + checkResult.summary.parse_error ? "problem" : "all";
+    // 일치 의심은 사람이 보고 고르도록 처음엔 체크하지 않는다
+    for (const f of checkResult.files) if (f.status === "suspect") f.picked = false;
+    const s = checkResult.summary;
+    checkTab = s.mismatch + s.suspect + s.parse_error ? "problem" : "all";
     renderCheck();
   } catch (err) {
     $("check-summary").innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
@@ -541,15 +546,16 @@ const seqOf = (id) => {
 
 function renderCheck() {
   const s = checkResult.summary;
-  const fixable = checkResult.files.filter(f => f.status === "mismatch" && Object.keys(f.fix).length).length;
-  $("check-summary").innerHTML = `<div class="msg ${s.mismatch || s.parse_error ? "warn" : "ok"}">` +
+  const fixable = checkResult.files.filter(f => (f.status === "mismatch" || f.status === "suspect") && Object.keys(f.fix).length).length;
+  $("check-summary").innerHTML = `<div class="msg ${s.mismatch || s.suspect || s.parse_error ? "warn" : "ok"}">` +
     `${esc(checkResult.source)}: 파일 ${s.files}개 ↔ DB 지면 ${s.print_rows}행\n` +
-    `일치 ${s.ok} · 틀림 ${s.mismatch} · 파일명 오류 ${s.parse_error} · DB에 없음 ${s.no_match} · 중복 파일 ${s.duplicate}` +
+    `일치 ${s.ok} · 틀림 ${s.mismatch} · 일치 의심 ${s.suspect} · 파일명 오류 ${s.parse_error} · DB에 없음 ${s.no_match} · 중복 파일 ${s.duplicate}` +
     ` · 파일 없는 DB 지면 행 ${s.missing}` +
-    (fixable ? `\n틀린 ${fixable}건은 아래에서 체크한 뒤 "표에 반영" → "저장"으로 고칠 수 있습니다.` : "") + `</div>`;
+    (s.suspect ? `\n일치 의심은 제목이 달라 확실하지 않은 짝입니다. 이유와 DB 제목을 보고 맞으면 체크하세요.` : "") +
+    (fixable ? `\n고칠 수 있는 ${fixable}건은 아래에서 체크한 뒤 "표에 반영" → "저장"으로 고칠 수 있습니다.` : "") + `</div>`;
 
   const tabs = [
-    ["problem", `확인 필요 (${s.mismatch + s.parse_error + s.no_match + s.duplicate})`],
+    ["problem", `확인 필요 (${s.mismatch + s.suspect + s.parse_error + s.no_match + s.duplicate})`],
     ["all", `전체 파일 (${s.files})`],
     ["missing", `파일 없는 DB 지면 행 (${s.missing})`],
   ];
@@ -572,11 +578,12 @@ function renderCheck() {
     <thead><tr><th>고치기</th><th>상태</th><th>파일</th><th>오류 부분 (파일 ↔ DB)</th><th>DB 행</th></tr></thead><tbody>` +
     list.map((f, i) => {
       const idx = checkResult.files.indexOf(f);
-      const canFix = f.status === "mismatch" && Object.keys(f.fix).length;
+      const canFix = (f.status === "mismatch" || f.status === "suspect") && Object.keys(f.fix).length;
       const probs = f.problems.map(p => `<div class="problem"><b>${esc(p.part)}</b> ` +
         (p.db !== "" ? `<span class="vs">파일 <b>${esc(p.file)}</b> ↔ DB <b>${esc(p.db)}</b></span> ` : `<span class="vs">'${esc(p.file)}'</span> `) +
         `<span class="note">${esc(p.message)}</span></div>`).join("");
-      const notes = f.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
+      const notes = (f.reasons && f.reasons.length ? `<div class="reason">의심 이유: ${esc(f.reasons.join(" · "))}</div>` : "") +
+        f.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
       const row = f.row ? `<span class="link" data-goto="${f.row.seq}" data-field="${f.problems[0]?.part === "지면" ? "type" : "date"}">연번 ${esc(seqOf(f.row.seq))}</span>
         <div class="note">${esc(f.row.date)} · ${esc(f.row.press)} · ${esc(f.row.type)}</div>` : "";
       return `<tr>
@@ -599,7 +606,7 @@ $("check-result").addEventListener("change", (e) => {
 function applyFixes() {
   let count = 0;
   for (const f of checkResult.files) {
-    if (f.status !== "mismatch" || f.picked === false || !f.row) continue;
+    if ((f.status !== "mismatch" && f.status !== "suspect") || f.picked === false || !f.row) continue;
     const r = rows.find(x => x._id === f.row.seq);
     if (!r || r.deleted) continue;
     for (const [field, value] of Object.entries(f.fix)) {
