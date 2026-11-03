@@ -625,6 +625,9 @@ function actionsHtml(f, idx) {
   if (f.status === "no_match" && f.date && f.press && f.title) {
     out.push(`<button data-register="${idx}" title="파일명의 매체·제목·지면·날짜로 새 지면 행을 표에 넣습니다 (저장해야 DB에 들어감)">새로 등록</button>`);
   }
+  if (f.row && (f.status === "suspect" || f.linked) && normText(f.row.title) !== normText(f.title)) {
+    out.push(`<button data-retitle="${idx}" title="연결된 DB 지면 행의 제목을 파일(지면 기사)의 제목으로 바꿉니다">DB 제목을 지면 제목으로</button>`);
+  }
   if (f.linked) out.push(`<button data-unlink="${idx}" title="직접 연결한 것을 끊고 다시 자동으로 찾습니다">연결 끊기</button>`);
   return out.length ? `<div class="acts">${out.join("")}</div>` : "";
 }
@@ -709,6 +712,17 @@ $("check-result").addEventListener("click", async (e) => {
       });
       render();
       message("warn", `새 지면 행을 표 맨 위에 넣었습니다 (${esc(r.cur.press)} · ${esc(r.cur.type)} · ${esc(r.cur.date)}). 분류 등을 채운 뒤 <b>저장</b>을 눌러야 DB에 들어갑니다.`);
+      await runCheck(lastSource, true);
+    } else if (t.dataset.retitle !== undefined) {
+      const f = checkResult.files[Number(t.dataset.retitle)];
+      const r = rows.find(x => x._id === f.row.seq);
+      if (!r || !confirm(`DB 지면 행 제목을 바꿀까요?\n\n지금: ${r.cur.title}\n바꿀 제목: ${f.title}`)) return;
+      const old = r.cur.title;
+      await api("/api/archive/title-alias", { method: "POST", body: { press: r.cur.press, old, new: f.title } });
+      r.cur.title = f.title;
+      problems.delete(`${r._id}:title`);
+      render();
+      message("warn", `${r.isNew ? "새 행" : "연번 " + r.seq}의 제목을 지면 기사 제목으로 바꿨습니다(노란 칸). <b>저장</b>을 눌러야 DB에 들어갑니다. 온라인 행 제목은 그대로입니다.`);
       await runCheck(lastSource, true);
     } else if (t.dataset.unlink !== undefined) {
       await api("/api/print-check/link", { method: "POST", body: { file: checkResult.files[Number(t.dataset.unlink)].file } });

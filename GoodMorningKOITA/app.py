@@ -335,6 +335,25 @@ class PrintLink(BaseModel):
     title: str | None = None
 
 
+class TitleAlias(BaseModel):
+    press: str
+    old: str
+    new: str
+
+
+@app.post("/api/archive/title-alias")
+def archive_title_alias(body: TitleAlias):
+    """
+    지면 확인에서 지면 행 제목을 지면 기사 제목으로 바꿀 때 부른다 (표의 제목은 화면에서 바꾸고 저장해야 DB에 들어감).
+    기사 목록에서 같은 기사를 다시 DB 저장해도 예전 제목의 지면 행이 또 생기지 않게 기록하고, 파일 연결도 새 제목으로 옮긴다.
+    """
+    if not (body.press.strip() and body.old.strip() and body.new.strip()):
+        raise HTTPException(400, "언론사명과 바꾸기 전·후 제목이 필요합니다.")
+    archive.add_title_alias(body.press, body.old, body.new)
+    printcheck.retitle_links(body.press, body.old, body.new)
+    return {"ok": True}
+
+
 @app.post("/api/print-check/link")
 def print_check_link(body: PrintLink):
     """지면 기사 파일을 DB 지면 행(언론사명·제목)에 직접 연결해 기억한다. 다음 확인부터 그 행과 비교"""

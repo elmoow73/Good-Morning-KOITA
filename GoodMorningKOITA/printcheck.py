@@ -61,6 +61,21 @@ def save_link(file_name, press=None, title=None):
     return links
 
 
+def retitle_links(press, old, new):
+    """지면 행 제목을 바꾸면, 그 행(언론사명·예전 제목)에 연결해 둔 파일들도 새 제목을 가리키게 한다"""
+    links = load_links()
+    changed = False
+    for link in links.values():
+        if norm(link["press"]) == norm(press) and norm(link["title"]) == norm(old):
+            link["title"] = new
+            changed = True
+    if changed:
+        path = links_path()
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(links, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(temp, path)
+
+
 def default_folder():
     return os.getenv("NEWSPAPER_DIR", "").strip()
 

@@ -177,6 +177,11 @@ def save(articles):
         # 지면 행은 URL이 "-"라 날짜를 편집기에서 고치면 키가 달라진다. 같은 언론사·제목의 지면 행이 이미 있으면
         # 그 행과 같은 행으로 보고 새로 넣지 않는다 (날짜·지면 번호가 달라도. 사용자 결정 2026-11-03)
         print_keys = {(r["press"], r["title"]): r["row_key"] for r in existing if is_print(r["type"])}
+        # 지면 확인에서 지면 행 제목을 지면 기사 제목으로 바꾼 경우, 예전(온라인) 제목으로 와도 같은 행으로 본다
+        for _ in range(3):  # 여러 번 바꾼 경우까지
+            for a in load_title_aliases():
+                if (a["press"], a["new"]) in print_keys:
+                    print_keys.setdefault((a["press"], a["old"]), print_keys[(a["press"], a["new"])])
         for row in new_rows:
             if is_print(row["type"]):
                 row["row_key"] = print_keys.get((row["press"], row["title"]), row["row_key"])
@@ -261,6 +266,31 @@ def info():
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
     return {"total": total, "folder": str(ARCHIVE_DIR.resolve())}
+
+
+def aliases_path():
+    return ARCHIVE_DIR / "title_aliases.json"
+
+
+def load_title_aliases():
+    """[{"press", "old", "new"}]: 지면 행 제목을 바꾼 기록 (예전 온라인 제목 → 지면 기사 제목)"""
+    try:
+        return json.loads(aliases_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def add_title_alias(press, old, new):
+    """
+    지면 행 제목을 바꾼 기록을 남긴다. 기사 목록에서 같은 기사를 다시 DB 저장할 때
+    예전 제목의 지면 행이 또 생기지 않게 하려고 쓴다.
+    """
+    aliases = [a for a in load_title_aliases() if not (a["press"] == press and a["old"] == old)]
+    aliases.append({"press": press, "old": old, "new": new})
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    temp = aliases_path().with_suffix(".tmp")
+    temp.write_text(json.dumps(aliases, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(temp, aliases_path())
 
 
 def saved_categories():
