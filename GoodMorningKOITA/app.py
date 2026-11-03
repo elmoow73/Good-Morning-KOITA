@@ -326,7 +326,22 @@ def print_check(body: PrintCheck):
         except FileNotFoundError as exc:
             raise HTTPException(404, f"{exc} (클라우드 서버에서 쓰는 중이면 '폴더 직접 고르기'를 쓰세요.)")
     rows = body.rows if body.rows is not None else archive.all_rows()
-    return printcheck.compare(names, rows) | {"source": source}
+    return printcheck.compare(names, rows, printcheck.load_links()) | {"source": source}
+
+
+class PrintLink(BaseModel):
+    file: str
+    press: str | None = None  # 비우면 연결 끊기
+    title: str | None = None
+
+
+@app.post("/api/print-check/link")
+def print_check_link(body: PrintLink):
+    """지면 기사 파일을 DB 지면 행(언론사명·제목)에 직접 연결해 기억한다. 다음 확인부터 그 행과 비교"""
+    if body.press is not None and not (body.press.strip() and (body.title or "").strip()):
+        raise HTTPException(400, "연결할 DB 행의 언론사명·제목이 필요합니다.")
+    printcheck.save_link(body.file, body.press, body.title)
+    return {"ok": True}
 
 
 @app.post("/api/export")

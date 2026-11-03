@@ -13,6 +13,7 @@ DB의 지면 행(구분이 온라인·방송이 아닌 행)과 매체명·제목
 DB를 고치지는 않는다. 결과를 보고 편집기(또는 cli.py --apply)에서 고친다.
 """
 
+import json
 import os
 import re
 import unicodedata
@@ -28,6 +29,36 @@ MISSING_FILE_MARGIN = 3
 SUSPECT_DAYS = 1
 SUSPECT_OVERLAP_NEAR = 0.2
 SUSPECT_OVERLAP = 0.5  # 파일 날짜 범위에서 앞뒤 며칠까지 "파일 없음"을 보여 줄지
+
+
+def links_path():
+    """파일 ↔ DB 행 연결을 기억해 두는 파일 (기사 DB 폴더 안)"""
+    import archive  # 순환 import를 피하려고 여기서
+    return archive.ARCHIVE_DIR / "print_links.json"
+
+
+def load_links():
+    """{파일명: {"press", "title"}}. 파일명은 폴더를 뺀 이름"""
+    try:
+        return json.loads(links_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_link(file_name, press=None, title=None):
+    """파일을 DB 지면 행(언론사명·제목)에 연결해 둔다. press가 None이면 연결을 끊는다"""
+    links = load_links()
+    name = Path(file_name).name
+    if press is None:
+        links.pop(name, None)
+    else:
+        links[name] = {"press": press, "title": title}
+    path = links_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(links, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(temp, path)
+    return links
 
 
 def default_folder():
@@ -189,11 +220,13 @@ def day_gap(a, b):
     return abs((date.fromisoformat(a) - date.fromisoformat(b)).days) if a and b else None
 
 
-def compare(names, rows):
+def compare(names, rows, links=None):
     """
     names: 파일명 목록, rows: 기사 DB 행 목록 (seq, date, press, type, title ...)
     반환: {"summary", "files": [...], "missing": [...]}
     files 항목의 status: ok / mismatch / suspect / no_match / parse_error / duplicate
+    links: {파일명: {"press", "title"}} 사용자가 "DB 기사와 연결"로 직접 짝지은 것. 제목이 달라도 그 행과 비교한다
+    0) 직접 연결한 파일은 그 행과 짝
     1) 제목이 거의 같으면 같은 기사로 보고 날짜·지면(숫자만)을 비교한다
     2) 그래도 짝이 없는 파일은 매체가 같고 (날짜 ±1일 이내이거나 제목에 같은 낱말이 많으면) "일치 의심"으로 보여 준다
     """
@@ -201,9 +234,28 @@ def compare(names, rows):
     parsed = [parse_filename(Path(n).name) | {"path": n} for n in names]
     usable = [fi for fi, f in enumerate(parsed) if not any(e["part"] in ("형식", "제목") for e in f["errors"])]
 
+    # 0) 직접 연결한 짝 (언론사명·제목이 같은 지면 행, 날짜가 가까운 것)
+    file_to_row, row_to_file, linked, broken = {}, {}, set(), set()
+    for fi, f in enumerate(parsed):
+        link = (links or {}).get(Path(f["path"]).name)
+        if not link:
+            continue
+        found = [
+            ri for ri, r in enumerate(print_rows)
+            if ri not in row_to_file and norm(r["press"]) == norm(link["press"]) and norm(r["title"]) == norm(link["title"])
+        ]
+        if not found:
+            broken.add(fi)
+            continue
+        found.sort(key=lambda ri: day_gap(f["date"], print_rows[ri]["date"]) or 0)
+        file_to_row[fi], row_to_file[found[0]] = found[0], fi
+        linked.add(fi)
+
     # 1) 제목이 거의 같은 짝: 점수가 높은 짝부터 1:1로 맞춘다
     pairs = []
     for fi in usable:
+        if fi in linked:
+            continue
         f = parsed[fi]
         for ri, r in enumerate(print_rows):
             score = title_score(f["title"], r["title"])
@@ -212,7 +264,6 @@ def compare(names, rows):
                 gap = day_gap(f["date"], r["date"])
                 pairs.append((-(score + (0.05 if same_press else 0)), 999 if gap is None else gap, fi, ri))
     pairs.sort()
-    file_to_row, row_to_file = {}, {}
     for _, _, fi, ri in pairs:
         if fi not in file_to_row and ri not in row_to_file:
             file_to_row[fi], row_to_file[ri] = ri, fi
@@ -246,7 +297,12 @@ def compare(names, rows):
             "file": f["path"], "press": f["press"], "title": f["title"], "page": f["page"],
             "page_text": f["page_text"], "date": f["date"], "date_text": f["date_text"],
             "notes": list(f["notes"]), "problems": [], "row": None, "fix": {}, "reasons": [],
+            "linked": fi in linked,
         }
+        if fi in linked:
+            item["notes"].append("직접 연결한 DB 행과 비교했습니다.")
+        if fi in broken:
+            item["notes"].append("예전에 연결한 DB 행(언론사명·제목)을 찾지 못해 다시 찾았습니다.")
         ri = file_to_row.get(fi, suspect_of.get(fi))
         if ri is None:
             if f["errors"]:

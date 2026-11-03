@@ -38,7 +38,7 @@ def print_check(args):
     except FileNotFoundError as exc:
         return out({"ok": False, "error": str(exc)}, 2)
     data = archive.editor_data()
-    result = printcheck.compare(names, data["rows"]) | {"source": folder}
+    result = printcheck.compare(names, data["rows"], printcheck.load_links()) | {"source": folder}
     applied = 0
     if args.apply:
         by_seq = {r["seq"]: r for r in data["rows"]}
