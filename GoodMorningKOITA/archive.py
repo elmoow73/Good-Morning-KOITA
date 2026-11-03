@@ -174,6 +174,12 @@ def save(articles):
 
     with connect() as conn:
         existing = stored_rows(conn)
+        # 지면 행은 URL이 "-"라 날짜를 편집기에서 고치면 키가 달라진다. 같은 언론사·제목의 지면 행이 이미 있으면
+        # 그 행과 같은 행으로 보고 새로 넣지 않는다 (날짜·지면 번호가 달라도. 사용자 결정 2026-11-03)
+        print_keys = {(r["press"], r["title"]): r["row_key"] for r in existing if is_print(r["type"])}
+        for row in new_rows:
+            if is_print(row["type"]):
+                row["row_key"] = print_keys.get((row["press"], row["title"]), row["row_key"])
         # 이미 저장된 행의 분류 덮어쓰기 (고르지 않은 "선택"은 예전 값을 그대로 둔다)
         chosen = {r["row_key"]: r["category"] for r in new_rows if r["category"]}
         categorized = 0
