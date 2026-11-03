@@ -37,7 +37,7 @@ def to_rows(articles):
         press = a.get("press") or ""
         url = a.get("url") or a.get("naver_link") or a.get("original_link")
         # 엑셀에는 안 나가고 DB 저장에만 쓰는 값
-        extra = {"게재일시": a["published_at"], "키워드": a.get("keywords") or ""}
+        extra = {"게재일시": a["published_at"], "키워드": a.get("keywords") or "", "분류": a.get("category") or ""}
 
         if a.get("print_page") and a["print_page"] != "온라인":
             rows.append({

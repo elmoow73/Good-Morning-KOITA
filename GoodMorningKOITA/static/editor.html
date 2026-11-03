@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoodMorningKOITA DB 편집</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb; --grid: #d9dde3;
+    --accent: #2457d6; --accent-soft: #e8eefc; --warn: #b45309; --warn-soft: #fef3c7;
+    --red: #b91c1c; --red-soft: #fee2e2; --green: #15803d; --green-soft: #dcfce7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px;
+           display: flex; align-items: center; gap: 10px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  button, input, select { font: inherit; }
+  button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], select.tool { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; }
+  .muted { color: var(--muted); }
+  .sep { width: 1px; align-self: stretch; background: var(--line); }
+  main { padding: 12px 16px; display: grid; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .msg { border-radius: 6px; padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.error { background: var(--red-soft); color: var(--red); }
+  .msg.ok { background: var(--green-soft); color: var(--green); }
+  .msg.warn { background: var(--warn-soft); color: var(--warn); }
+  .msg a { color: inherit; }
+
+  /* 엑셀 같은 표 */
+  #grid-wrap { overflow: auto; max-height: calc(100vh - 150px); border: 1px solid var(--grid); background: #fff; }
+  table.grid { border-collapse: collapse; min-width: 100%; table-layout: fixed; }
+  .grid th, .grid td { border: 1px solid var(--grid); padding: 0; height: 26px; }
+  .grid th { background: #eef0f3; font-weight: 600; font-size: 12px; position: sticky; top: 0; z-index: 2;
+             padding: 4px 6px; cursor: pointer; white-space: nowrap; user-select: none; }
+  .grid th:hover { background: #e3e7ee; }
+  .grid th.nosort { cursor: default; }
+  .grid td.num { background: #f4f5f7; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+  .grid td input, .grid td select { width: 100%; height: 100%; border: 0; padding: 3px 6px; background: transparent;
+                                    outline: none; font: inherit; color: inherit; }
+  .grid td input:focus, .grid td select:focus { box-shadow: inset 0 0 0 2px var(--accent); background: #fff; }
+  .grid td.ro input { color: var(--muted); }
+  .grid td.dirty { background: var(--warn-soft); }
+  .grid td.bad { background: var(--red-soft); box-shadow: inset 0 0 0 1px var(--red); }
+  .grid td.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: #c7d7fe; } }
+  .grid tr.new td.num { background: var(--green-soft); color: var(--green); }
+  .grid tr.deleted td { text-decoration: line-through; color: var(--muted); background: #f3f4f6; }
+  .grid tr.deleted td input, .grid tr.deleted td select { text-decoration: line-through; }
+  .grid tr.picked td.num { background: var(--accent-soft); color: var(--accent); }
+  .grid input[type=checkbox] { width: 14px; height: 14px; }
+
+  /* 지면보도 날짜 확인 결과 */
+  #check-panel { display: none; }
+  table.result { border-collapse: collapse; width: 100%; }
+  .result th, .result td { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: top; }
+  .result th { font-size: 12px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.ok { background: var(--green-soft); color: var(--green); }
+  .badge.mismatch { background: var(--red-soft); color: var(--red); }
+  .badge.parse_error, .badge.duplicate { background: var(--warn-soft); color: var(--warn); }
+  .badge.no_match { background: #f1f2f4; color: var(--muted); }
+  .problem b { color: var(--red); }
+  .problem .vs { font-variant-numeric: tabular-nums; }
+  .note { color: var(--muted); font-size: 12px; }
+  .link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 720px) {
+    header, main { padding: 8px; }
+    #grid-wrap { max-height: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📝 기사 DB 편집</h1>
+  <button id="btn-save" class="primary" title="Ctrl+S. SQLite 원본과 CSV·JSON 사본을 모두 똑같이 바꿉니다">저장</button>
+  <button id="btn-reload" title="저장된 DB를 다시 불러오기 (저장 안 한 수정은 사라짐)">다시 불러오기</button>
+  <span class="sep"></span>
+  <button id="btn-add" title="맨 위에 빈 행 추가">행 추가</button>
+  <button id="btn-delete" title="왼쪽 칸을 체크한 행을 삭제 표시 (저장할 때 지워짐). 다시 누르면 취소">체크한 행 삭제</button>
+  <button id="btn-undo" title="저장하지 않은 수정을 모두 되돌리기">수정 모두 취소</button>
+  <span class="sep"></span>
+  <button id="btn-check" title="지면 기사 파일명과 DB 지면 행의 날짜를 비교합니다">지면보도 날짜 확인</button>
+  <span class="sep"></span>
+  <select id="type-filter" class="tool" title="구분으로 골라 보기">
+    <option value="">구분 전체</option><option value="print">지면만</option>
+    <option value="온라인">온라인만</option><option value="방송">방송만</option>
+  </select>
+  <input type="text" id="filter" placeholder="표에서 찾기" style="width:160px">
+  <span id="info" class="muted"></span>
+</header>
+
+<main>
+  <div id="message"></div>
+
+  <section class="panel" id="check-panel">
+    <h2>지면보도 날짜 확인</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="folder" placeholder="지면 기사 폴더 (예: C:\…\News\Newspaper)" style="flex:1; min-width:260px">
+      <button id="btn-run-check" class="primary">이 폴더로 확인</button>
+      <label class="muted" title="폰이나 클라우드 서버에서 쓸 때: 내 기기의 폴더를 골라 파일명만 비교합니다(파일은 올리지 않음)">
+        <button type="button" id="btn-pick">폴더 직접 고르기</button>
+        <input type="file" id="picker" webkitdirectory multiple style="display:none">
+      </label>
+      <button id="btn-close-check" title="결과 닫기">닫기</button>
+    </div>
+    <div class="note" style="margin-bottom:8px">
+      파일명 형식: <b>[매체명]_기사제목_지면_날짜.jpg</b> (예: [매일경제]_산기협 장영실상 시상_A16면_20261027.jpg).
+      저장하지 않은 수정도 반영해서 비교합니다. DB는 바로 바뀌지 않고, 고칠 항목을 체크해 표에 넣은 뒤 <b>저장</b>을 눌러야 바뀝니다.
+    </div>
+    <div id="check-summary"></div>
+    <div class="row tabs" id="check-tabs" style="margin:8px 0"></div>
+    <div id="check-result" style="overflow-x:auto"></div>
+  </section>
+
+  <div id="grid-wrap">
+    <table class="grid">
+      <colgroup id="cols"></colgroup>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// 표의 열: 이름, 머리글, 폭, 고칠 수 있는지
+const FIELDS = [
+  { name: "seq", header: "연번", width: 56, readonly: true },
+  { name: "date", header: "날짜", width: 108 },
+  { name: "press", header: "언론사명", width: 120 },
+  { name: "type", header: "구분", width: 80, list: "type-list" },
+  { name: "title", header: "제목", width: 420 },
+  { name: "url", header: "URL", width: 280 },
+  { name: "published_at", header: "게재일시", width: 190 },
+  { name: "keywords", header: "키워드", width: 160 },
+  { name: "saved_at", header: "저장일시", width: 170, readonly: true },
+  { name: "category", header: "분류", width: 112, select: true },
+];
+const EDITABLE = FIELDS.filter(f => !f.readonly).map(f => f.name);
+
+let rows = [];          // {_id, seq, orig, cur, deleted, isNew}
+let revision = "";
+let categories = [];
+let nextId = 1;
+let sortBy = null;      // {name, dir}
+let problems = new Map();  // `${_id}:${field}` → 메시지
+let checkResult = null;
+let checkTab = "problem";
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" }, ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (res.status === 401) { location.href = "/login"; throw new Error("로그인이 필요합니다."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.detail || res.statusText);
+    err.problems = data.problems || [];
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function message(kind, text) {
+  $("message").innerHTML = text ? `<div class="msg ${kind}">${text}</div>` : "";
+}
+
+const isPrint = (type) => type !== "온라인" && type !== "방송";
+const isDirty = (r, name) => r.isNew || String(r.cur[name] ?? "") !== String(r.orig[name] ?? "");
+const rowChanged = (r) => r.isNew || r.deleted || EDITABLE.some(n => isDirty(r, n));
+const changedCount = () => rows.filter(rowChanged).length;
+
+// ---------------- 불러오기 ----------------
+
+function load(data) {
+  revision = data.revision;
+  categories = data.categories;
+  rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
+  problems.clear();
+  render();
+}
+
+async function reload(ask = true) {
+  if (ask && changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다시 불러올까요?")) return;
+  try {
+    load(await api("/api/archive/rows"));
+    message("", "");
+  } catch (err) { message("error", esc(err.message)); }
+}
+
+// ---------------- 표 그리기 ----------------
+
+function visibleRows() {
+  const term = $("filter").value.trim().toLowerCase();
+  const type = $("type-filter").value;
+  let list = rows.filter(r =>
+    (!term || EDITABLE.some(n => String(r.cur[n] ?? "").toLowerCase().includes(term)) || String(r.seq).includes(term)) &&
+    (!type || (type === "print" ? isPrint(r.cur.type) : r.cur.type === type)));
+  if (sortBy) {
+    const { name, dir } = sortBy;
+    list = [...list].sort((a, b) => {
+      const x = a.cur[name] ?? "", y = b.cur[name] ?? "";
+      const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ko");
+      return c * dir;
+    });
+  }
+  return list;
+}
+
+function renderHead() {
+  $("cols").innerHTML = `<col style="width:34px">` + FIELDS.map(f => `<col style="width:${f.width}px">`).join("");
+  $("head").innerHTML = `<th class="nosort"><input type="checkbox" id="pick-all" title="보이는 행 모두 체크"></th>` +
+    FIELDS.map(f => {
+      const mark = sortBy && sortBy.name === f.name ? (sortBy.dir > 0 ? " ▲" : " ▼") : "";
+      return `<th data-sort="${f.name}" title="눌러서 정렬">${f.header}${mark}</th>`;
+    }).join("");
+}
+
+function cellHtml(r, f) {
+  const value = r.cur[f.name] ?? "";
+  const key = `${r._id}:${f.name}`;
+  const cls = [f.readonly ? "ro" : "", !f.readonly && !r.isNew && isDirty(r, f.name) ? "dirty" : "",
+               problems.has(key) ? "bad" : ""].join(" ");
+  const title = problems.get(key) || (!f.readonly && !r.isNew && isDirty(r, f.name) ? `원래 값: ${r.orig[f.name] ?? ""}` : "");
+  let inner;
+  if (f.select) {
+    inner = `<select data-f="${f.name}"><option value="">선택</option>` +
+      categories.map(c => `<option ${c === value ? "selected" : ""}>${esc(c)}</option>`).join("") +
+      (value && !categories.includes(value) ? `<option selected>${esc(value)}</option>` : "") + `</select>`;
+  } else {
+    inner = `<input data-f="${f.name}" value="${esc(value)}" ${f.readonly ? "readonly tabindex='-1'" : ""} ${f.list ? `list="${f.list}"` : ""}>`;
+  }
+  return `<td class="${cls}" title="${esc(title)}">${inner}</td>`;
+}
+
+function render() {
+  renderHead();
+  const list = visibleRows();
+  $("body").innerHTML = list.map(r => `
+    <tr data-id="${r._id}" class="${r.isNew ? "new" : ""} ${r.deleted ? "deleted" : ""} ${r.picked ? "picked" : ""}">
+      <td class="num"><input type="checkbox" data-pick ${r.picked ? "checked" : ""}></td>
+      ${FIELDS.map(f => cellHtml(r, f)).join("")}
+    </tr>`).join("") ||
+    `<tr><td colspan="${FIELDS.length + 1}" class="muted" style="padding:16px; text-align:center">행이 없습니다.</td></tr>`;
+  renderInfo();
+}
+
+function renderInfo() {
+  const n = changedCount();
+  const shown = $("body").querySelectorAll("tr[data-id]").length;
+  const prints = rows.filter(r => !r.deleted && isPrint(r.cur.type)).length;
+  $("info").textContent = `${shown}/${rows.length}행 표시 · 지면 ${prints}행` + (n ? ` · 수정 ${n}행 (저장 안 됨)` : "");
+  $("btn-save").textContent = n ? `저장 (${n})` : "저장";
+}
+
+const rowOf = (el) => rows.find(r => r._id === Number(el.closest("tr").dataset.id));
+
+// ---------------- 편집 ----------------
+
+$("body").addEventListener("input", (e) => {
+  const f = e.target.dataset.f;
+  if (!f) return;
+  const r = rowOf(e.target);
+  r.cur[f] = e.target.value;
+  problems.delete(`${r._id}:${f}`);
+  const td = e.target.closest("td");
+  td.classList.toggle("dirty", !r.isNew && isDirty(r, f));
+  td.classList.remove("bad");
+  td.title = !r.isNew && isDirty(r, f) ? `원래 값: ${r.orig[f] ?? ""}` : "";
+  renderInfo();
+});
+
+$("body").addEventListener("change", (e) => {
+  if (e.target.dataset.pick === undefined) return;
+  const r = rowOf(e.target);
+  r.picked = e.target.checked;
+  e.target.closest("tr").classList.toggle("picked", r.picked);
+});
+
+$("head").addEventListener("click", (e) => {
+  if (e.target.id === "pick-all") {
+    const on = e.target.checked;
+    const ids = new Set([...$("body").querySelectorAll("tr[data-id]")].map(tr => Number(tr.dataset.id)));
+    for (const r of rows) if (ids.has(r._id)) r.picked = on;
+    render();
+    return;
+  }
+  const name = e.target.closest("th")?.dataset.sort;
+  if (!name) return;
+  sortBy = sortBy && sortBy.name === name ? (sortBy.dir > 0 ? { name, dir: -1 } : null) : { name, dir: 1 };
+  render();
+});
+
+// 엑셀처럼 방향키·Enter로 칸 이동, Ctrl+S 저장
+function focusCell(tr, col) {
+  if (!tr) return;
+  const cell = tr.children[col]?.querySelector("input:not([type=checkbox]), select");
+  if (cell) { cell.focus(); if (cell.select && cell.tagName === "INPUT") cell.select(); }
+}
+
+$("body").addEventListener("keydown", (e) => {
+  const el = e.target;
+  if (!el.dataset.f) return;
+  const td = el.closest("td"), tr = td.closest("tr");
+  const col = [...tr.children].indexOf(td);
+  const atStart = el.tagName !== "INPUT" || (el.selectionStart === 0 && el.selectionEnd === 0);
+  const atEnd = el.tagName !== "INPUT" || el.selectionStart === el.value.length;
+  // 드롭다운(분류)에서도 위아래 방향키는 칸 이동. 값은 마우스나 Alt+↓로 고른다
+  if (e.altKey) return;
+  if (e.key === "ArrowDown" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); focusCell(tr.nextElementSibling, col); }
+  else if (e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey)) { e.preventDefault(); focusCell(tr.previousElementSibling, col); }
+  else if (e.key === "ArrowLeft" && atStart) { e.preventDefault(); focusCell(tr, col - 1); }
+  else if (e.key === "ArrowRight" && atEnd) { e.preventDefault(); focusCell(tr, col + 1); }
+  else if (e.key === "Escape" && el.tagName === "INPUT") {
+    // 이 칸만 원래 값으로
+    const r = rowOf(el);
+    el.value = r.orig[el.dataset.f] ?? "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+});
+
+// 엑셀에서 여러 칸을 복사해 붙여넣으면 지금 칸부터 오른쪽·아래로 채운다
+$("body").addEventListener("paste", (e) => {
+  const el = e.target;
+  if (!el.dataset.f) return;
+  const text = e.clipboardData.getData("text/plain").replace(/\r/g, "").replace(/\n$/, "");
+  if (!text.includes("\t") && !text.includes("\n")) return;
+  e.preventDefault();
+  const trs = [...$("body").querySelectorAll("tr[data-id]")];
+  const startRow = trs.indexOf(el.closest("tr"));
+  const startCol = FIELDS.findIndex(f => f.name === el.dataset.f);
+  text.split("\n").forEach((line, i) => {
+    const tr = trs[startRow + i];
+    if (!tr) return;
+    const r = rows.find(x => x._id === Number(tr.dataset.id));
+    line.split("\t").forEach((value, j) => {
+      const f = FIELDS[startCol + j];
+      if (!f || f.readonly) return;
+      r.cur[f.name] = value.trim();
+      problems.delete(`${r._id}:${f.name}`);
+    });
+  });
+  render();
+});
+
+$("btn-add").addEventListener("click", () => {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const empty = Object.fromEntries(FIELDS.map(f => [f.name, ""]));
+  const r = { _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, date: today, type: "온라인" }, deleted: false, isNew: true };
+  rows.unshift(r);
+  sortBy = null;
+  $("filter").value = "";
+  $("type-filter").value = "";
+  render();
+  focusCell($("body").querySelector(`tr[data-id="${r._id}"]`), 3);
+});
+
+$("btn-delete").addEventListener("click", () => {
+  const picked = rows.filter(r => r.picked);
+  if (!picked.length) { alert("먼저 왼쪽 칸을 체크하세요."); return; }
+  const undo = picked.every(r => r.deleted);
+  for (const r of picked) {
+    if (r.isNew && !undo) rows = rows.filter(x => x !== r);  // 저장 전 새 행은 바로 없앤다
+    else r.deleted = !undo;
+    r.picked = false;
+  }
+  render();
+});
+
+$("btn-undo").addEventListener("click", () => {
+  if (!changedCount() || !confirm("저장하지 않은 수정을 모두 되돌릴까요?")) return;
+  rows = rows.filter(r => !r.isNew);
+  for (const r of rows) { r.cur = { ...r.orig }; r.deleted = false; }
+  problems.clear();
+  render();
+});
+
+$("btn-reload").addEventListener("click", () => reload(true));
+$("filter").addEventListener("input", render);
+$("type-filter").addEventListener("change", render);
+
+// ---------------- 저장 ----------------
+
+async function save() {
+  if (!changedCount()) { message("ok", "바뀐 내용이 없습니다."); return; }
+  const sent = rows.filter(r => !r.deleted);
+  const deleted = rows.filter(r => r.deleted && !r.isNew).length;
+  if (deleted && !confirm(`${deleted}행을 DB에서 지웁니다. 저장할까요?`)) return;
+  const btn = $("btn-save");
+  btn.disabled = true;
+  try {
+    const body = { revision, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
+    const result = await api("/api/archive/rows", { method: "PUT", body });
+    load(result);
+    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (DB ${result.total}행` +
+      (result.added ? ` · 추가 ${result.added}` : "") + (result.deleted ? ` · 삭제 ${result.deleted}` : "") + ")";
+    text += "\n연번은 게재일시 최신순으로 다시 매겨졌습니다.";
+    message(result.warnings.length ? "warn" : "ok", esc(text + (result.warnings.length ? "\n\n" + result.warnings.join("\n") : "")));
+  } catch (err) {
+    if (err.problems && err.problems.length) {
+      problems.clear();
+      for (const p of err.problems) problems.set(`${sent[p.index]._id}:${p.field}`, p.message);
+      render();
+      const list = err.problems.slice(0, 20).map(p => {
+        const r = sent[p.index];
+        const where = r.isNew ? "새 행" : `연번 ${r.seq}`;
+        const label = FIELDS.find(f => f.name === p.field)?.header || p.field;
+        return `• <span class="link" data-goto="${r._id}" data-field="${p.field}">${where} ${label}</span>: ${esc(p.message)}`;
+      }).join("\n");
+      message("error", `저장하지 못했습니다. ${esc(err.message)} (빨간 칸)\n${list}` +
+        (err.problems.length > 20 ? `\n… 외 ${err.problems.length - 20}곳` : ""));
+    } else {
+      message("error", `저장하지 못했습니다. ${esc(err.message)}`);
+    }
+  } finally { btn.disabled = false; }
+}
+$("btn-save").addEventListener("click", save);
+
+// 메시지·결과에서 행을 누르면 표의 그 칸으로 이동
+function gotoCell(id, field) {
+  let tr = $("body").querySelector(`tr[data-id="${id}"]`);
+  if (!tr) {  // 골라 보기에 가려져 있으면 풀고 다시
+    $("filter").value = ""; $("type-filter").value = ""; render();
+    tr = $("body").querySelector(`tr[data-id="${id}"]`);
+  }
+  if (!tr) return;
+  const col = FIELDS.findIndex(f => f.name === field) + 1;
+  tr.scrollIntoView({ block: "center" });
+  const td = tr.children[Math.max(col, 1)];
+  td.classList.remove("flash"); void td.offsetWidth; td.classList.add("flash");
+  focusCell(tr, Math.max(col, 1));
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-goto]");
+  if (t) gotoCell(Number(t.dataset.goto), t.dataset.field || "date");
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (changedCount()) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// ---------------- 지면보도 날짜 확인 ----------------
+
+const STATUS = {
+  mismatch: "틀림", parse_error: "파일명 오류", no_match: "DB에 없음", duplicate: "중복 파일", ok: "일치",
+};
+
+function remember(key, value) { try { localStorage.setItem(key, value); } catch {} }
+function recall(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
+
+$("btn-check").addEventListener("click", async () => {
+  $("check-panel").style.display = "block";
+  if (!$("folder").value) {
+    $("folder").value = recall("newspaper-folder");
+    if (!$("folder").value) {
+      try { $("folder").value = (await api("/api/print-check/folder")).folder; } catch {}
+    }
+  }
+  if ($("folder").value) runCheck({ folder: $("folder").value });
+  else $("folder").focus();
+});
+$("btn-close-check").addEventListener("click", () => { $("check-panel").style.display = "none"; });
+$("btn-run-check").addEventListener("click", () => {
+  remember("newspaper-folder", $("folder").value.trim());
+  runCheck({ folder: $("folder").value.trim() });
+});
+$("btn-pick").addEventListener("click", () => $("picker").click());
+$("picker").addEventListener("change", (e) => {
+  const names = [...e.target.files].map(f => f.webkitRelativePath || f.name);
+  e.target.value = "";
+  if (names.length) runCheck({ names });
+});
+
+async function runCheck(source) {
+  $("check-summary").innerHTML = `<div class="muted">비교하는 중…</div>`;
+  $("check-result").innerHTML = "";
+  $("check-tabs").innerHTML = "";
+  // 표의 지금 값(저장 전 수정 포함)으로 비교. seq 자리에 표의 행 번호(_id)를 넣어 보낸다
+  const current = rows.filter(r => !r.deleted && isPrint(r.cur.type))
+    .map(r => ({ seq: r._id, date: r.cur.date, press: r.cur.press, type: r.cur.type, title: r.cur.title }));
+  try {
+    checkResult = await api("/api/print-check", { method: "POST", body: { ...source, rows: current } });
+    checkTab = checkResult.summary.mismatch + checkResult.summary.parse_error ? "problem" : "all";
+    renderCheck();
+  } catch (err) {
+    $("check-summary").innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
+  }
+}
+
+const seqOf = (id) => {
+  const r = rows.find(x => x._id === id);
+  return r ? (r.isNew ? "새 행" : r.seq) : "?";
+};
+
+function renderCheck() {
+  const s = checkResult.summary;
+  const fixable = checkResult.files.filter(f => f.status === "mismatch" && Object.keys(f.fix).length).length;
+  $("check-summary").innerHTML = `<div class="msg ${s.mismatch || s.parse_error ? "warn" : "ok"}">` +
+    `${esc(checkResult.source)}: 파일 ${s.files}개 ↔ DB 지면 ${s.print_rows}행\n` +
+    `일치 ${s.ok} · 틀림 ${s.mismatch} · 파일명 오류 ${s.parse_error} · DB에 없음 ${s.no_match} · 중복 파일 ${s.duplicate}` +
+    ` · 파일 없는 DB 지면 행 ${s.missing}` +
+    (fixable ? `\n틀린 ${fixable}건은 아래에서 체크한 뒤 "표에 반영" → "저장"으로 고칠 수 있습니다.` : "") + `</div>`;
+
+  const tabs = [
+    ["problem", `확인 필요 (${s.mismatch + s.parse_error + s.no_match + s.duplicate})`],
+    ["all", `전체 파일 (${s.files})`],
+    ["missing", `파일 없는 DB 지면 행 (${s.missing})`],
+  ];
+  $("check-tabs").innerHTML = tabs.map(([k, label]) =>
+    `<button data-tab="${k}" class="${checkTab === k ? "on" : ""}">${label}</button>`).join("") +
+    (fixable ? `<span class="sep"></span><button id="btn-apply" class="primary">체크한 수정을 표에 반영</button>` : "");
+
+  if (checkTab === "missing") {
+    $("check-result").innerHTML = checkResult.missing.length ? `<table class="result">
+      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th></tr></thead><tbody>` +
+      checkResult.missing.map(m => `<tr>
+        <td><span class="link" data-goto="${m.seq}" data-field="date">${esc(seqOf(m.seq))}</span></td>
+        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td></tr>`).join("") +
+      `</tbody></table><div class="note">파일 날짜 범위(앞뒤 3일) 안에 있는데 짝이 되는 파일이 없는 DB 지면 행입니다.</div>`
+      : `<div class="muted">없습니다.</div>`;
+    return;
+  }
+  const list = checkResult.files.filter(f => checkTab === "all" || f.status !== "ok");
+  $("check-result").innerHTML = list.length ? `<table class="result">
+    <thead><tr><th>고치기</th><th>상태</th><th>파일</th><th>오류 부분 (파일 ↔ DB)</th><th>DB 행</th></tr></thead><tbody>` +
+    list.map((f, i) => {
+      const idx = checkResult.files.indexOf(f);
+      const canFix = f.status === "mismatch" && Object.keys(f.fix).length;
+      const probs = f.problems.map(p => `<div class="problem"><b>${esc(p.part)}</b> ` +
+        (p.db !== "" ? `<span class="vs">파일 <b>${esc(p.file)}</b> ↔ DB <b>${esc(p.db)}</b></span> ` : `<span class="vs">'${esc(p.file)}'</span> `) +
+        `<span class="note">${esc(p.message)}</span></div>`).join("");
+      const notes = f.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
+      const row = f.row ? `<span class="link" data-goto="${f.row.seq}" data-field="${f.problems[0]?.part === "지면" ? "type" : "date"}">연번 ${esc(seqOf(f.row.seq))}</span>
+        <div class="note">${esc(f.row.date)} · ${esc(f.row.press)} · ${esc(f.row.type)}</div>` : "";
+      return `<tr>
+        <td>${canFix ? `<label title="표에 반영할 항목"><input type="checkbox" data-fix="${idx}" ${f.picked !== false ? "checked" : ""}></label>` : ""}</td>
+        <td><span class="badge ${f.status}">${STATUS[f.status]}</span></td>
+        <td style="max-width:360px; overflow-wrap:anywhere">${esc(f.file)}</td>
+        <td>${probs || `<span class="note">날짜 ${esc(f.date || "")} · 지면 ${esc(f.page_text || "")}</span>`}${notes}</td>
+        <td>${row}</td></tr>`;
+    }).join("") + `</tbody></table>` : `<div class="muted">확인이 필요한 파일이 없습니다. 모두 일치합니다.</div>`;
+}
+
+$("check-tabs").addEventListener("click", (e) => {
+  if (e.target.dataset.tab) { checkTab = e.target.dataset.tab; renderCheck(); }
+  if (e.target.id === "btn-apply") applyFixes();
+});
+$("check-result").addEventListener("change", (e) => {
+  if (e.target.dataset.fix !== undefined) checkResult.files[Number(e.target.dataset.fix)].picked = e.target.checked;
+});
+
+function applyFixes() {
+  let count = 0;
+  for (const f of checkResult.files) {
+    if (f.status !== "mismatch" || f.picked === false || !f.row) continue;
+    const r = rows.find(x => x._id === f.row.seq);
+    if (!r || r.deleted) continue;
+    for (const [field, value] of Object.entries(f.fix)) {
+      if (r.cur[field] !== value) { r.cur[field] = value; problems.delete(`${r._id}:${field}`); count++; }
+    }
+    f.status = "ok";
+    f.notes.push("표에 반영함 (저장 전)");
+  }
+  render();
+  renderCheck();
+  message(count ? "warn" : "ok", count
+    ? `${count}칸을 표에 반영했습니다(노란 칸). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`
+    : "반영할 수정이 없습니다.");
+}
+
+// ---------------- 시작 ----------------
+document.body.insertAdjacentHTML("beforeend",
+  `<datalist id="type-list"><option>온라인</option><option>방송</option><option>A1면</option></datalist>`);
+reload(false);
+</script>
+</body>
+</html>
