@@ -61,7 +61,12 @@
   .grid input[type=checkbox] { width: 14px; height: 14px; }
 
   /* 지면보도 날짜 확인 결과 */
-  #check-panel { display: none; }
+  #check-panel, #import-panel { display: none; }
+  #import-text { width: 100%; min-height: 140px; font: 12px/1.4 Consolas, "Malgun Gothic", monospace;
+                 border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .badge.add { background: var(--green-soft); color: var(--green); }
+  .badge.dup { background: #f1f2f4; color: var(--muted); }
+  .badge.bad { background: var(--red-soft); color: var(--red); }
   table.result { border-collapse: collapse; width: 100%; }
   .result th, .result td { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: top; }
   .result th { font-size: 12px; color: var(--muted); }
@@ -91,6 +96,7 @@
   <button id="btn-delete" title="왼쪽 칸을 체크한 행을 삭제 표시 (저장할 때 지워짐). 다시 누르면 취소">체크한 행 삭제</button>
   <button id="btn-undo" title="저장하지 않은 수정을 모두 되돌리기">수정 모두 취소</button>
   <span class="sep"></span>
+  <button id="btn-import" title="엑셀에서 복사한 여러 행(머리글 포함)이나 CSV 파일을 새 행으로 넣기">붙여넣어 가져오기</button>
   <button id="btn-check" title="지면 기사 파일명과 DB 지면 행의 날짜를 비교합니다">지면보도 날짜 확인</button>
   <span class="sep"></span>
   <select id="type-filter" class="tool" title="구분으로 골라 보기">
@@ -103,6 +109,24 @@
 
 <main>
   <div id="message"></div>
+
+  <section class="panel" id="import-panel">
+    <h2>붙여넣어 가져오기</h2>
+    <div class="note" style="margin-bottom:8px">
+      예전 DB를 엑셀에서 <b>머리글 행까지</b> 복사해 아래 칸에 붙여넣거나 CSV 파일을 여세요. 머리글 이름(날짜, 언론사명, 구분, 제목, URL, 게재일시, 키워드, 분류)으로 열을 맞추고, 연번·저장일시 등 다른 열은 무시합니다.
+      게재일시가 없으면 날짜 0시, 키워드·분류가 없으면 빈 값으로 넣습니다. 이미 있는 행(온라인·방송은 URL, 지면은 같은 언론사·제목)은 건너뜁니다.
+    </div>
+    <textarea id="import-text" placeholder="여기에 붙여넣기 (Ctrl+V)"></textarea>
+    <div class="row" style="margin:8px 0">
+      <button id="btn-import-preview" class="primary">미리보기</button>
+      <button id="btn-import-file">CSV 파일 열기</button>
+      <input type="file" id="import-file" accept=".csv,.tsv,.txt" style="display:none">
+      <button id="btn-import-close">닫기</button>
+    </div>
+    <div id="import-summary"></div>
+    <div class="row tabs" id="import-tabs" style="margin:8px 0"></div>
+    <div id="import-result" style="overflow-x:auto; max-height:420px; overflow-y:auto"></div>
+  </section>
 
   <section class="panel" id="check-panel">
     <h2>지면보도 날짜 확인</h2>
@@ -590,6 +614,172 @@ function applyFixes() {
     ? `${count}칸을 표에 반영했습니다(노란 칸). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`
     : "반영할 수정이 없습니다.");
 }
+
+// ---------------- 붙여넣어 가져오기 ----------------
+
+// 머리글 이름 → 열. 엑셀 내보내기·CSV 사본·예전 DB에서 쓸 법한 이름
+const IMPORT_HEADERS = {
+  date: ["날짜", "일자", "보도일", "보도일자", "게재일", "date"],
+  press: ["언론사명", "언론사", "매체", "매체명", "press"],
+  type: ["구분", "유형", "type"],
+  title: ["제목", "기사제목", "title"],
+  url: ["url", "링크", "주소", "기사url"],
+  published_at: ["게재일시", "published_at"],
+  keywords: ["키워드", "keywords"],
+  category: ["분류", "category"],
+};
+// 머리글이 없을 때: 엑셀 내보내기 순서 (연번, 날짜, 언론사명, 구분, 제목, URL)
+const EXCEL_ORDER = [null, "date", "press", "type", "title", "url"];
+let importResult = null;
+let importTab = "add";
+
+// 엑셀 복사(탭) 또는 CSV(쉼표) 글을 칸 배열로. 따옴표로 감싼 칸(줄바꿈·쉼표 포함)도 읽는다
+function parseTable(text) {
+  text = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const firstLine = text.split("\n", 1)[0];
+  const sep = firstLine.includes("\t") ? "\t" : ",";
+  const rowsOut = [];
+  let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === "") quoted = true;
+    else if (ch === sep) { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell); rowsOut.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rowsOut.push(row); }
+  return rowsOut.filter(r => r.some(c => c.trim() !== ""));
+}
+
+function normHeader(h) { return h.replace(/\s|\(.*?\)/g, "").toLowerCase(); }
+
+function importDate(text) {
+  const t = text.trim();
+  let m = t.match(/^(\d{2,4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})/);
+  if (!m && /^\d{8}$/.test(t)) m = [t, t.slice(0, 4), t.slice(4, 6), t.slice(6, 8)];
+  if (m) {
+    let y = Number(m[1]); if (y < 100) y += 2000;
+    const d = new Date(Date.UTC(y, Number(m[2]) - 1, Number(m[3])));
+    if (d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3])) return d.toISOString().slice(0, 10);
+    return null;
+  }
+  if (/^\d{5}(\.\d+)?$/.test(t)) {  // 엑셀 날짜 일련번호
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(t)) * 86400000).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function previewImport() {
+  const table = parseTable($("import-text").value);
+  if (!table.length) { $("import-summary").innerHTML = `<div class="msg error">붙여넣은 내용이 없습니다.</div>`; return; }
+  // 머리글 찾기
+  const header = table[0].map(normHeader);
+  let map = header.map(h => Object.keys(IMPORT_HEADERS).find(k => IMPORT_HEADERS[k].some(a => normHeader(a) === h)) || null);
+  let body = table.slice(1), headerNote;
+  if (!map.includes("date") || !map.includes("title")) {
+    if (table[0].length === 6 && importDate(table[0][1] || "")) {
+      map = EXCEL_ORDER; body = table;
+      headerNote = "머리글이 없어 엑셀 내보내기 순서(연번·날짜·언론사명·구분·제목·URL)로 읽었습니다.";
+    } else {
+      $("import-summary").innerHTML = `<div class="msg error">머리글 행에서 날짜·제목 열을 찾지 못했습니다. 첫 줄에 머리글(날짜, 언론사명, 구분, 제목, URL …)을 포함해 복사해 주세요.\n읽은 첫 줄: ${esc(table[0].join(" | "))}</div>`;
+      return;
+    }
+  } else {
+    const used = map.filter(Boolean).map(k => FIELDS.find(f => f.name === k).header);
+    const ignored = table[0].filter((h, i) => !map[i] && h.trim());
+    headerNote = `읽은 열: ${used.join(", ")}` + (ignored.length ? ` · 무시한 열: ${ignored.join(", ")}` : "");
+  }
+
+  // 지금 표(삭제 표시 제외)에 있는 행과 비교
+  const keyOf = (r) => isPrint(r.type) ? `p|${r.press}|${r.title}` : `d|${r.url}|${r.type}`;
+  const have = new Map();
+  for (const r of rows) if (!r.deleted) have.set(keyOf(r.cur), r.isNew ? "새 행" : `연번 ${r.seq}`);
+
+  const items = body.map((cells, i) => {
+    const raw = {};
+    map.forEach((k, j) => { if (k) raw[k] = (cells[j] ?? "").trim(); });
+    const r = Object.fromEntries(EDITABLE.map(n => [n, raw[n] || ""]));
+    const errors = [];
+    const date = importDate(raw.date || "");
+    if (date) r.date = date; else errors.push(`날짜 '${raw.date || ""}'를 읽을 수 없음`);
+    if (!r.type) r.type = r.url && r.url !== "-" ? "온라인" : "";
+    for (const [n, label] of [["press", "언론사명"], ["type", "구분"], ["title", "제목"]]) if (!r[n]) errors.push(`${label} 없음`);
+    if (r.type && isPrint(r.type)) r.url = r.url || "-";
+    else if (r.type && !/^https?:\/\//.test(r.url)) errors.push(`URL '${r.url}'이 http로 시작하지 않음`);
+    if (!r.published_at && date) r.published_at = `${date}T00:00:00+09:00`;
+    if (r.category && !categories.includes(r.category)) errors.push(`분류 '${r.category}'는 목록에 없음`);
+    const line = i + (body === table ? 1 : 2);
+    if (errors.length) return { line, row: r, status: "bad", note: errors.join(", ") };
+    const key = keyOf(r);
+    if (have.has(key)) return { line, row: r, status: "dup", note: `이미 있음 (${have.get(key)})` };
+    have.set(key, `붙여넣은 ${line}번째 줄`);
+    return { line, row: r, status: "add", note: "" };
+  });
+  importResult = { items, headerNote };
+  importTab = items.some(x => x.status === "bad") ? "bad" : "add";
+  renderImport();
+}
+
+function renderImport() {
+  const { items, headerNote } = importResult;
+  const n = (s) => items.filter(x => x.status === s).length;
+  $("import-summary").innerHTML = `<div class="msg ${n("bad") ? "warn" : "ok"}">${esc(headerNote)}\n` +
+    `붙여넣은 ${items.length}줄 → 추가 ${n("add")} · 이미 있음 ${n("dup")} · 형식 오류 ${n("bad")}` +
+    (n("bad") ? "\n형식 오류 줄은 넣지 않습니다. 엑셀에서 고쳐 다시 붙여넣거나, 넣은 뒤 표에서 직접 추가하세요." : "") + `</div>`;
+  const tabs = [["add", `추가할 행 (${n("add")})`], ["dup", `이미 있음 (${n("dup")})`], ["bad", `형식 오류 (${n("bad")})`]];
+  $("import-tabs").innerHTML = tabs.map(([k, l]) => `<button data-itab="${k}" class="${importTab === k ? "on" : ""}">${l}</button>`).join("") +
+    (n("add") ? `<span class="sep"></span><button id="btn-import-apply" class="primary">${n("add")}행을 표에 넣기</button>` : "");
+  const list = items.filter(x => x.status === importTab);
+  const label = { add: "추가", dup: "이미 있음", bad: "오류" };
+  $("import-result").innerHTML = list.length ? `<table class="result"><thead><tr><th>줄</th><th>상태</th>` +
+    `<th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th><th>URL</th><th>분류</th><th>내용</th></tr></thead><tbody>` +
+    list.slice(0, 500).map(x => `<tr><td>${x.line}</td><td><span class="badge ${x.status}">${label[x.status]}</span></td>
+      <td>${esc(x.row.date)}</td><td>${esc(x.row.press)}</td><td>${esc(x.row.type)}</td><td>${esc(x.row.title)}</td>
+      <td style="max-width:220px; overflow-wrap:anywhere">${esc(x.row.url)}</td><td>${esc(x.row.category)}</td>
+      <td class="note">${esc(x.note)}</td></tr>`).join("") + `</tbody></table>` +
+    (list.length > 500 ? `<div class="note">… 외 ${list.length - 500}줄</div>` : "")
+    : `<div class="muted">없습니다.</div>`;
+}
+
+function applyImport() {
+  const add = importResult.items.filter(x => x.status === "add");
+  const empty = Object.fromEntries(FIELDS.map(f => [f.name, ""]));
+  const added = add.map(x => ({ _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, ...x.row }, deleted: false, isNew: true }));
+  rows = [...added, ...rows];
+  sortBy = null; $("filter").value = ""; $("type-filter").value = "";
+  render();
+  $("import-panel").style.display = "none";
+  $("import-text").value = "";
+  importResult = null;
+  message("warn", `${added.length}행을 표 맨 위에 넣었습니다(연번 초록색). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`);
+}
+
+$("btn-import").addEventListener("click", () => {
+  $("import-panel").style.display = "block";
+  $("import-text").focus();
+});
+$("btn-import-close").addEventListener("click", () => { $("import-panel").style.display = "none"; });
+$("btn-import-preview").addEventListener("click", previewImport);
+$("import-text").addEventListener("paste", () => setTimeout(previewImport, 0));
+$("btn-import-file").addEventListener("click", () => $("import-file").click());
+$("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const buf = await file.arrayBuffer();
+  let text = new TextDecoder("utf-8").decode(buf);
+  if (text.includes("�")) text = new TextDecoder("euc-kr").decode(buf);  // 엑셀이 저장한 한글 CSV(CP949)
+  $("import-text").value = text;
+  previewImport();
+});
+$("import-tabs").addEventListener("click", (e) => {
+  if (e.target.dataset.itab) { importTab = e.target.dataset.itab; renderImport(); }
+  if (e.target.id === "btn-import-apply") applyImport();
+});
 
 // ---------------- 시작 ----------------
 document.body.insertAdjacentHTML("beforeend",
