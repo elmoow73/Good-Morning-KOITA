@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 venv/
 database/
+GoodMorningKOITA/deploy/data/
+GoodMorningKOITA/deploy/.deploy.env
+GoodMorningKOITA/deploy/backup.log

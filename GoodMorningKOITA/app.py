@@ -4,6 +4,7 @@ GoodMorningKOITA 웹 서버
 실행: python app.py  →  브라우저에서 http://127.0.0.1:8000
 """
 
+import os
 import threading
 import webbrowser
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
@@ -23,6 +24,7 @@ import auth  # noqa: E402
 import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
 import exporter  # noqa: E402
+import printcheck  # noqa: E402
 
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
 MIN_COLLECT_INTERVAL = timedelta(minutes=10)
@@ -47,10 +49,49 @@ async def login_submit(request: Request):
     return await auth.login(request)
 
 
+# ---------------- 앱 설치(PWA)·상태 확인 ----------------
+
+@app.get("/healthz")
+def healthz():
+    """로그인 없이 부르는 상태 확인 (클라우드 서버·모니터링·AI 에이전트용). 정상이면 200"""
+    try:
+        with db.connect() as conn:
+            conn.execute("SELECT 1")
+    except Exception as exc:
+        return JSONResponse({"ok": False, "version": VERSION, "error": str(exc)}, status_code=503)
+    return {"ok": True, "version": VERSION}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(BASE_DIR / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    # 서비스 워커는 앱 전체(/)를 맡도록 최상위 주소에서 내려준다
+    return FileResponse(BASE_DIR / "static" / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/icons/{name}")
+def icon(name: str):
+    path = BASE_DIR / "static" / "icons" / Path(name).name
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/")
 def index():
     # 파일을 바꿨을 때 브라우저가 예전 화면을 캐시해서 보여주지 않도록
     return FileResponse(BASE_DIR / "static" / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/editor")
+def editor():
+    """기사 DB 편집기 (엑셀처럼 직접 고치는 화면)"""
+    return FileResponse(BASE_DIR / "static" / "editor.html", headers={"Cache-Control": "no-store"})
 
 
 # ---------------- 키워드 ----------------
@@ -134,7 +175,8 @@ def run_collect(
 
 @app.get("/api/status")
 def status():
-    return {"last_run": db.last_run(), "version": VERSION, "archive": archive.info()}
+    return {"last_run": db.last_run(), "version": VERSION, "archive": archive.info(),
+            "categories": archive.CATEGORIES}
 
 
 # ---------------- 기사 ----------------
@@ -169,9 +211,12 @@ def period(days, date_from, date_to):
 def get_articles(days: int = 1, date_from: str | None = None, date_to: str | None = None):
     since, until = period(days, date_from, date_to)
     rows = db.list_articles(since, until)
-    saved = archive.saved_urls()
+    saved = archive.saved_categories()
     for row in rows:
         row["archived"] = row["url"] in saved
+        # 목록에서 아직 안 골랐으면 DB(편집기 등)에 들어 있는 분류를 보여 준다
+        if not row["category"] and saved.get(row["url"]):
+            row["category"] = saved[row["url"]]
     return rows
 
 
@@ -179,12 +224,31 @@ class ArticlePatch(BaseModel):
     press: str | None = None
     print_page: str | None = None
     has_video: bool | None = None
+    category: str | None = None
 
 
 @app.patch("/api/articles/{article_id}")
 def patch_article(article_id: int, body: ArticlePatch):
-    db.update_article(article_id, body.press, body.print_page, body.has_video)
+    if body.category and body.category not in archive.CATEGORIES:
+        raise HTTPException(400, f"분류는 {', '.join(archive.CATEGORIES)} 중 하나여야 합니다.")
+    db.update_article(article_id, body.press, body.print_page, body.has_video, body.category)
     return {"ok": True}
+
+
+class CategorySelection(BaseModel):
+    ids: list[int]
+    category: str
+
+
+@app.post("/api/articles/category")
+def set_categories(body: CategorySelection):
+    """체크한 기사 여러 개의 분류를 한 번에 고른다 (빈 값 = 선택으로 되돌리기)"""
+    if body.category and body.category not in archive.CATEGORIES:
+        raise HTTPException(400, f"분류는 {', '.join(archive.CATEGORIES)} 중 하나여야 합니다.")
+    if not body.ids:
+        raise HTTPException(400, "체크한 기사가 없습니다.")
+    db.set_category(body.ids, body.category)
+    return {"ok": True, "count": len(body.ids)}
 
 
 @app.delete("/api/articles/{article_id}")
@@ -210,6 +274,93 @@ def save_to_archive(body: Selection):
     articles = selected_articles(body)
     with archive_lock:
         return archive.save(articles)
+
+
+# ---------------- 기사 DB 편집기 ----------------
+
+@app.get("/api/archive/rows")
+def archive_rows():
+    """기사 DB 전체 행과 지문(revision). 저장할 때 이 지문을 같이 보낸다"""
+    return archive.editor_data()
+
+
+class ArchiveEdit(BaseModel):
+    revision: str
+    rows: list[dict]
+
+
+@app.put("/api/archive/rows")
+def replace_archive_rows(body: ArchiveEdit):
+    """편집기에서 고친 전체 행으로 기사 DB(SQLite)를 바꾸고 CSV·JSON도 똑같이 다시 만든다"""
+    with archive_lock:
+        try:
+            result = archive.replace_all(body.rows, body.revision)
+        except archive.EditError as exc:
+            status = 422 if exc.problems else 409
+            return JSONResponse({"detail": str(exc), "problems": exc.problems}, status_code=status)
+    return result | archive.editor_data()
+
+
+class PrintCheck(BaseModel):
+    folder: str | None = None       # 서버(이 프로그램이 도는 PC)의 폴더. 비우면 .env NEWSPAPER_DIR
+    names: list[str] | None = None  # 브라우저에서 고른 폴더의 파일명 (폰·클라우드 서버에서 쓸 때)
+    rows: list[dict] | None = None  # 편집기의 지금 행 (저장 전 수정 반영). 비우면 저장된 DB
+
+
+@app.get("/api/print-check/folder")
+def print_check_folder():
+    return {"folder": printcheck.default_folder()}
+
+
+@app.post("/api/print-check")
+def print_check(body: PrintCheck):
+    """지면 기사 파일명과 기사 DB 지면 행의 날짜·지면을 비교한다 (DB는 고치지 않음)"""
+    folder = (body.folder or "").strip() or printcheck.default_folder()
+    if body.names is not None:
+        names, source = body.names, "선택한 폴더"
+    else:
+        if not folder:
+            raise HTTPException(400, "지면 기사 폴더를 입력하세요 (.env의 NEWSPAPER_DIR에 넣어 두면 기본값이 됩니다).")
+        try:
+            names, source = printcheck.list_files(folder), folder
+        except FileNotFoundError as exc:
+            raise HTTPException(404, f"{exc} (클라우드 서버에서 쓰는 중이면 '폴더 직접 고르기'를 쓰세요.)")
+    rows = body.rows if body.rows is not None else archive.all_rows()
+    return printcheck.compare(names, rows, printcheck.load_links()) | {"source": source}
+
+
+class PrintLink(BaseModel):
+    file: str
+    press: str | None = None  # 비우면 연결 끊기
+    title: str | None = None
+
+
+class TitleAlias(BaseModel):
+    press: str
+    old: str
+    new: str
+
+
+@app.post("/api/archive/title-alias")
+def archive_title_alias(body: TitleAlias):
+    """
+    지면 확인에서 지면 행 제목을 지면 기사 제목으로 바꿀 때 부른다 (표의 제목은 화면에서 바꾸고 저장해야 DB에 들어감).
+    기사 목록에서 같은 기사를 다시 DB 저장해도 예전 제목의 지면 행이 또 생기지 않게 기록하고, 파일 연결도 새 제목으로 옮긴다.
+    """
+    if not (body.press.strip() and body.old.strip() and body.new.strip()):
+        raise HTTPException(400, "언론사명과 바꾸기 전·후 제목이 필요합니다.")
+    archive.add_title_alias(body.press, body.old, body.new)
+    printcheck.retitle_links(body.press, body.old, body.new)
+    return {"ok": True}
+
+
+@app.post("/api/print-check/link")
+def print_check_link(body: PrintLink):
+    """지면 기사 파일을 DB 지면 행(언론사명·제목)에 직접 연결해 기억한다. 다음 확인부터 그 행과 비교"""
+    if body.press is not None and not (body.press.strip() and (body.title or "").strip()):
+        raise HTTPException(400, "연결할 DB 행의 언론사명·제목이 필요합니다.")
+    printcheck.save_link(body.file, body.press, body.title)
+    return {"ok": True}
 
 
 @app.post("/api/export")
@@ -238,5 +389,10 @@ def xlsx_response(articles):
 if __name__ == "__main__":
     import uvicorn
 
-    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # .env의 HOST·PORT로 바꿀 수 있다. 클라우드 서버에서는 HOST=0.0.0.0
+    host = os.getenv("HOST", "").strip() or "127.0.0.1"
+    port = int(os.getenv("PORT", "").strip() or 8000)
+    # 내 PC에서 켤 때만 브라우저를 자동으로 연다 (OPEN_BROWSER=0이면 안 연다)
+    if os.getenv("OPEN_BROWSER", "").strip() != "0" and host in ("127.0.0.1", "localhost"):
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")

@@ -16,12 +16,19 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 COOKIE_NAME = "goodmorning_session"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30일
 
-# 서버를 다시 켜면 바뀌므로, 재시작하면 다시 로그인해야 한다
-_SESSION_KEY = secrets.token_bytes(32)
+# .env의 SESSION_SECRET이 있으면 서버를 다시 켜도 로그인이 유지된다 (클라우드 서버용).
+# 없으면 켤 때마다 새로 만들어서, 재시작하면 다시 로그인해야 한다
+_SESSION_KEY = os.getenv("SESSION_SECRET", "").strip().encode() or secrets.token_bytes(32)
+
+# 로그인 없이 열리는 주소: 로그인 화면, 앱 설치 정보(PWA), 상태 확인
+PUBLIC_PATHS = {"/login", "/healthz", "/manifest.webmanifest", "/sw.js"}
+PUBLIC_PREFIXES = ("/icons/",)
 
 LOGIN_PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoodMorningKOITA 로그인</title>
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#2457d6">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
   body { margin:0; min-height:100vh; display:grid; place-items:center; background:#f6f7f9; color:#1d2330;
          font:14px/1.5 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif; }
@@ -55,9 +62,10 @@ def is_logged_in(request: Request):
 
 
 async def require_login(request: Request, call_next):
-    if request.url.path == "/login" or is_logged_in(request):
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or is_logged_in(request):
         return await call_next(request)
-    if request.url.path.startswith("/api/"):
+    if path.startswith("/api/"):
         return JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
     return RedirectResponse("/login", status_code=303)
 

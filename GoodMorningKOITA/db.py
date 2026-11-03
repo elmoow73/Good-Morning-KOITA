@@ -1,11 +1,14 @@
 """SQLite 저장소: 키워드, 기사, 수집 기록"""
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).with_name("news.db")
+# .env의 DATA_DIR로 데이터 폴더를 옮길 수 있다 (클라우드 서버에서는 디스크를 붙인 /data 등)
+DATA_DIR = Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).parent)
+DB_PATH = DATA_DIR / "news.db"
 
 # 기본 키워드. 하나라도 들어간 기사를 모두 모은다(OR). 따옴표는 정확히 일치하는 기사 위주로 검색
 DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협회"', '"산기협"', '"장영실상"', '"엔지니어상"']
@@ -13,7 +16,7 @@ DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협�
 OLD_DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
 
 # PRAGMA user_version으로 기록하는 DB 구조 버전
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keywords (
@@ -35,7 +38,8 @@ CREATE TABLE IF NOT EXISTS articles (
     original_link  TEXT,
     published_at   TEXT NOT NULL,
     collected_at   TEXT NOT NULL,
-    source         TEXT NOT NULL DEFAULT 'api'
+    source         TEXT NOT NULL DEFAULT 'api',
+    category       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at);
 
@@ -72,6 +76,7 @@ def connect():
 
 
 def init_db():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
         if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
@@ -87,6 +92,12 @@ def init_db():
             columns = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
             if "source" not in columns:
                 conn.execute("ALTER TABLE articles ADD COLUMN source TEXT NOT NULL DEFAULT 'api'")
+            conn.execute("PRAGMA user_version = 2")
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 3:
+            # v1.3.0: 기사 목록에서 고른 분류 (보도자료, 인용 등). 빈 값 = 아직 안 고름
+            columns = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
+            if "category" not in columns:
+                conn.execute("ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT ''")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -190,15 +201,23 @@ def articles_by_ids(ids):
     return [a for a in list_articles() if a["id"] in wanted]
 
 
-def update_article(article_id, press=None, print_page=None, has_video=None):
-    """잘못 판별된 언론사명·지면·영상을 화면에서 고칠 때 사용"""
+def update_article(article_id, press=None, print_page=None, has_video=None, category=None):
+    """잘못 판별된 언론사명·지면·영상을 화면에서 고치거나 분류를 고를 때 사용"""
     with connect() as conn:
+        if category is not None:
+            conn.execute("UPDATE articles SET category = ? WHERE id = ?", (category, article_id))
         if press is not None:
             conn.execute("UPDATE articles SET press = ? WHERE id = ?", (press, article_id))
         if print_page is not None:
             conn.execute("UPDATE articles SET print_page = ? WHERE id = ?", (print_page or "온라인", article_id))
         if has_video is not None:
             conn.execute("UPDATE articles SET has_video = ? WHERE id = ?", (1 if has_video else 0, article_id))
+
+
+def set_category(article_ids, category):
+    """체크한 기사 여러 개의 분류를 한 번에"""
+    with connect() as conn:
+        conn.executemany("UPDATE articles SET category = ? WHERE id = ?", [(category, i) for i in article_ids])
 
 
 def delete_article(article_id):

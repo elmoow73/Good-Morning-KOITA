@@ -1,0 +1,34 @@
+# GoodMorningKOITA 클라우드 서버 구성: 앱 + Caddy(HTTPS 인증서 자동 발급)
+# 직접 실행보다 setup.sh 사용을 권장 (DOMAIN, .env를 알아서 준비)
+services:
+  app:
+    build: ..
+    env_file: ../.env
+    environment:
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: "8000"
+      OPEN_BROWSER: "0"
+    volumes:
+      - ${KOITA_DATA:-./data}:/data
+    restart: unless-stopped
+    shm_size: "512mb"   # 지면 확인용 크로미움
+
+  caddy:
+    image: caddy:2.8
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN을 정하세요 (setup.sh가 자동으로 넣음)}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

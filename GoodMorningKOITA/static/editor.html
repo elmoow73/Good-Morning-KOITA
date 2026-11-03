@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoodMorningKOITA DB 편집</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb; --grid: #d9dde3;
+    --accent: #2457d6; --accent-soft: #e8eefc; --warn: #b45309; --warn-soft: #fef3c7;
+    --red: #b91c1c; --red-soft: #fee2e2; --green: #15803d; --green-soft: #dcfce7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px;
+           display: flex; align-items: center; gap: 10px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  button, input, select { font: inherit; }
+  button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], select.tool { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; }
+  .muted { color: var(--muted); }
+  .sep { width: 1px; align-self: stretch; background: var(--line); }
+  main { padding: 12px 16px; display: grid; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .msg { border-radius: 6px; padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.error { background: var(--red-soft); color: var(--red); }
+  .msg.ok { background: var(--green-soft); color: var(--green); }
+  .msg.warn { background: var(--warn-soft); color: var(--warn); }
+  .msg a { color: inherit; }
+
+  /* 엑셀 같은 표 */
+  #grid-wrap { overflow: auto; max-height: calc(100vh - 150px); border: 1px solid var(--grid); background: #fff; }
+  table.grid { border-collapse: collapse; min-width: 100%; table-layout: fixed; }
+  .grid th, .grid td { border: 1px solid var(--grid); padding: 0; height: 26px; }
+  .grid th { background: #eef0f3; font-weight: 600; font-size: 12px; position: sticky; top: 0; z-index: 2;
+             padding: 4px 6px; cursor: pointer; white-space: nowrap; user-select: none; }
+  .grid th:hover { background: #e3e7ee; }
+  .grid th.nosort { cursor: default; }
+  .grid td.num { background: #f4f5f7; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+  .grid td input, .grid td select { width: 100%; height: 100%; border: 0; padding: 3px 6px; background: transparent;
+                                    outline: none; font: inherit; color: inherit; }
+  .grid td input:focus, .grid td select:focus { box-shadow: inset 0 0 0 2px var(--accent); background: #fff; }
+  .grid td.ro input { color: var(--muted); }
+  .grid td.urlcell { position: relative; }
+  .grid td.urlcell input { padding-right: 26px; }
+  .grid td.urlcell .open { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); border: 0;
+                           background: transparent; padding: 0 5px; color: var(--accent); cursor: pointer; font-size: 14px; }
+  .grid td.urlcell .open:hover { background: var(--accent-soft); border-radius: 4px; }
+  .grid td.dirty { background: var(--warn-soft); }
+  .grid td.bad { background: var(--red-soft); box-shadow: inset 0 0 0 1px var(--red); }
+  .grid td.flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: #c7d7fe; } }
+  .grid tr.new td.num { background: var(--green-soft); color: var(--green); }
+  .grid tr.deleted td { text-decoration: line-through; color: var(--muted); background: #f3f4f6; }
+  .grid tr.deleted td input, .grid tr.deleted td select { text-decoration: line-through; }
+  .grid tr.picked td.num { background: var(--accent-soft); color: var(--accent); }
+  .grid input[type=checkbox] { width: 14px; height: 14px; }
+
+  /* 지면보도 날짜 확인 결과 */
+  #check-panel, #import-panel { display: none; }
+  #import-text { width: 100%; min-height: 140px; font: 12px/1.4 Consolas, "Malgun Gothic", monospace;
+                 border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .badge.add { background: var(--green-soft); color: var(--green); }
+  .badge.dup { background: #f1f2f4; color: var(--muted); }
+  .badge.bad { background: var(--red-soft); color: var(--red); }
+  table.result { border-collapse: collapse; width: 100%; }
+  .result th, .result td { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: top; }
+  .result th { font-size: 12px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.ok { background: var(--green-soft); color: var(--green); }
+  .badge.mismatch { background: var(--red-soft); color: var(--red); }
+  .badge.suspect { background: #ffedd5; color: #c2410c; }
+  .reason { color: #c2410c; font-size: 12px; }
+  .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .acts button { padding: 2px 8px; font-size: 12px; }
+  tr.picker > td { background: #f8fafc; }
+  .cands { max-height: 260px; overflow: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .cand { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  .cand:last-child { border-bottom: 0; }
+  .cand .t { flex: 1; }
+  .badge.parse_error, .badge.duplicate { background: var(--warn-soft); color: var(--warn); }
+  .badge.no_match { background: #f1f2f4; color: var(--muted); }
+  .problem b { color: var(--red); }
+  .problem .vs { font-variant-numeric: tabular-nums; }
+  .note { color: var(--muted); font-size: 12px; }
+  .link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 720px) {
+    header, main { padding: 8px; }
+    #grid-wrap { max-height: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📝 기사 DB 편집 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
+  <button id="btn-save" class="primary" title="Ctrl+S. SQLite 원본과 CSV·JSON 사본을 모두 똑같이 바꿉니다">저장</button>
+  <button id="btn-reload" title="저장된 DB를 다시 불러오기 (저장 안 한 수정은 사라짐)">다시 불러오기</button>
+  <span class="sep"></span>
+  <button id="btn-add" title="맨 위에 빈 행 추가">행 추가</button>
+  <button id="btn-delete" title="왼쪽 칸을 체크한 행을 삭제 표시 (저장할 때 지워짐). 다시 누르면 취소">체크한 행 삭제</button>
+  <select id="bulk-category" class="tool" title="왼쪽 칸을 체크한 행들의 분류를 한 번에 바꾸기 (저장해야 반영)">
+    <option value="" disabled selected>체크한 행 분류</option>
+  </select>
+  <button id="btn-undo" title="저장하지 않은 수정을 모두 되돌리기">수정 모두 취소</button>
+  <span class="sep"></span>
+  <button id="btn-import" title="엑셀에서 복사한 여러 행(머리글 포함)이나 CSV 파일을 새 행으로 넣기">붙여넣어 가져오기</button>
+  <button id="btn-check" title="지면 기사 파일명과 DB 지면 행의 날짜를 비교합니다">지면보도 날짜 확인</button>
+  <span class="sep"></span>
+  <select id="type-filter" class="tool" title="구분으로 골라 보기">
+    <option value="">구분 전체</option><option value="print">지면만</option>
+    <option value="온라인">온라인만</option><option value="방송">방송만</option>
+  </select>
+  <input type="text" id="filter" placeholder="표에서 찾기" style="width:160px">
+  <span id="info" class="muted"></span>
+</header>
+
+<main>
+  <div id="message"></div>
+
+  <section class="panel" id="import-panel">
+    <h2>붙여넣어 가져오기</h2>
+    <div class="note" style="margin-bottom:8px">
+      예전 DB를 엑셀에서 <b>머리글 행까지</b> 복사해 아래 칸에 붙여넣거나 CSV 파일을 여세요. 머리글 이름(날짜, 언론사명, 구분, 제목, URL, 게재일시, 키워드, 분류)으로 열을 맞추고, 연번·저장일시 등 다른 열은 무시합니다.
+      게재일시가 없으면 날짜 0시, 키워드·분류가 없으면 빈 값으로 넣습니다. 이미 있는 행(온라인·방송은 URL, 지면은 같은 언론사·제목)은 건너뜁니다.
+    </div>
+    <textarea id="import-text" placeholder="여기에 붙여넣기 (Ctrl+V)"></textarea>
+    <div class="row" style="margin:8px 0">
+      <button id="btn-import-preview" class="primary">미리보기</button>
+      <button id="btn-import-file">CSV 파일 열기</button>
+      <input type="file" id="import-file" accept=".csv,.tsv,.txt" style="display:none">
+      <button id="btn-import-close">닫기</button>
+    </div>
+    <div id="import-summary"></div>
+    <div class="row tabs" id="import-tabs" style="margin:8px 0"></div>
+    <div id="import-result" style="overflow-x:auto; max-height:420px; overflow-y:auto"></div>
+  </section>
+
+  <section class="panel" id="check-panel">
+    <h2>지면보도 날짜 확인</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="folder" placeholder="지면 기사 폴더 (예: C:\…\News\Newspaper)" style="flex:1; min-width:260px">
+      <button id="btn-run-check" class="primary">이 폴더로 확인</button>
+      <label class="muted" title="폰이나 클라우드 서버에서 쓸 때: 내 기기의 폴더를 골라 파일명만 비교합니다(파일은 올리지 않음)">
+        <button type="button" id="btn-pick">폴더 직접 고르기</button>
+        <input type="file" id="picker" webkitdirectory multiple style="display:none">
+      </label>
+      <button id="btn-close-check" title="결과 닫기">닫기</button>
+    </div>
+    <div class="note" style="margin-bottom:8px">
+      파일명 형식: <b>[매체명] 기사제목_지면_날짜.jpg</b> (예: [매일경제] 산기협 장영실상 시상_A16면_20261027.jpg).
+      저장하지 않은 수정도 반영해서 비교합니다. DB는 바로 바뀌지 않고, 고칠 항목을 체크해 표에 넣은 뒤 <b>저장</b>을 눌러야 바뀝니다.
+    </div>
+    <div id="check-summary"></div>
+    <div class="row tabs" id="check-tabs" style="margin:8px 0"></div>
+    <div id="check-result" style="overflow-x:auto"></div>
+  </section>
+
+  <div id="grid-wrap">
+    <table class="grid">
+      <colgroup id="cols"></colgroup>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// 표의 열: 이름, 머리글, 폭, 고칠 수 있는지
+const FIELDS = [
+  { name: "seq", header: "연번", width: 56, readonly: true },
+  { name: "date", header: "날짜", width: 108 },
+  { name: "press", header: "언론사명", width: 120 },
+  { name: "type", header: "구분", width: 80, list: "type-list" },
+  { name: "title", header: "제목", width: 420 },
+  { name: "url", header: "URL", width: 280 },
+  { name: "published_at", header: "게재일시", width: 190 },
+  { name: "keywords", header: "키워드", width: 160 },
+  { name: "saved_at", header: "저장일시", width: 170, readonly: true },
+  { name: "category", header: "분류", width: 112, select: true },
+];
+const EDITABLE = FIELDS.filter(f => !f.readonly).map(f => f.name);
+
+let rows = [];          // {_id, seq, orig, cur, deleted, isNew}
+let revision = "";
+let categories = [];
+let nextId = 1;
+let sortBy = null;      // {name, dir}
+let problems = new Map();  // `${_id}:${field}` → 메시지
+let checkResult = null;
+let checkTab = "problem";
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" }, ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (res.status === 401) { location.href = "/login"; throw new Error("로그인이 필요합니다."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.detail || res.statusText);
+    err.problems = data.problems || [];
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function message(kind, text) {
+  $("message").innerHTML = text ? `<div class="msg ${kind}">${text}</div>` : "";
+}
+
+const isPrint = (type) => type !== "온라인" && type !== "방송";
+const isDirty = (r, name) => r.isNew || String(r.cur[name] ?? "") !== String(r.orig[name] ?? "");
+const rowChanged = (r) => r.isNew || r.deleted || EDITABLE.some(n => isDirty(r, n));
+const changedCount = () => rows.filter(rowChanged).length;
+
+// ---------------- 불러오기 ----------------
+
+function load(data) {
+  revision = data.revision;
+  categories = data.categories;
+  fillBulkCategory();
+  rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
+  problems.clear();
+  render();
+}
+
+async function reload(ask = true) {
+  if (ask && changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다시 불러올까요?")) return;
+  try {
+    load(await api("/api/archive/rows"));
+    message("", "");
+  } catch (err) { message("error", esc(err.message)); }
+}
+
+// ---------------- 표 그리기 ----------------
+
+function visibleRows() {
+  const term = $("filter").value.trim().toLowerCase();
+  const type = $("type-filter").value;
+  let list = rows.filter(r =>
+    (!term || EDITABLE.some(n => String(r.cur[n] ?? "").toLowerCase().includes(term)) || String(r.seq).includes(term)) &&
+    (!type || (type === "print" ? isPrint(r.cur.type) : r.cur.type === type)));
+  if (sortBy) {
+    const { name, dir } = sortBy;
+    list = [...list].sort((a, b) => {
+      const x = a.cur[name] ?? "", y = b.cur[name] ?? "";
+      const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ko");
+      return c * dir;
+    });
+  }
+  return list;
+}
+
+function renderHead() {
+  $("cols").innerHTML = `<col style="width:34px">` + FIELDS.map(f => `<col style="width:${f.width}px">`).join("");
+  $("head").innerHTML = `<th class="nosort"><input type="checkbox" id="pick-all" title="보이는 행 모두 체크"></th>` +
+    FIELDS.map(f => {
+      const mark = sortBy && sortBy.name === f.name ? (sortBy.dir > 0 ? " ▲" : " ▼") : "";
+      return `<th data-sort="${f.name}" title="눌러서 정렬">${f.header}${mark}</th>`;
+    }).join("");
+}
+
+function cellHtml(r, f) {
+  const value = r.cur[f.name] ?? "";
+  const key = `${r._id}:${f.name}`;
+  const cls = [f.readonly ? "ro" : "", !f.readonly && !r.isNew && isDirty(r, f.name) ? "dirty" : "",
+               problems.has(key) ? "bad" : ""].join(" ");
+  const title = problems.get(key) || (!f.readonly && !r.isNew && isDirty(r, f.name) ? `원래 값: ${r.orig[f.name] ?? ""}` : "");
+  let inner;
+  if (f.select) {
+    inner = `<select data-f="${f.name}"><option value="">선택</option>` +
+      categories.map(c => `<option ${c === value ? "selected" : ""}>${esc(c)}</option>`).join("") +
+      (value && !categories.includes(value) ? `<option selected>${esc(value)}</option>` : "") + `</select>`;
+  } else {
+    inner = `<input data-f="${f.name}" value="${esc(value)}" ${f.readonly ? "readonly tabindex='-1'" : ""} ${f.list ? `list="${f.list}"` : ""}>`;
+  }
+  if (f.name === "url") {
+    // 칸을 누르면 고치기, 오른쪽 ↗를 누르면 기사 열기 (지면 행처럼 URL이 "-"이면 버튼 없음)
+    if (/^https?:\/\//.test(value)) inner += `<button class="open" data-open-url tabindex="-1" title="기사 열기 (새 탭)">↗</button>`;
+    return `<td class="urlcell ${cls}" title="${esc(title)}">${inner}</td>`;
+  }
+  return `<td class="${cls}" title="${esc(title)}">${inner}</td>`;
+}
+
+function render() {
+  renderHead();
+  const list = visibleRows();
+  $("body").innerHTML = list.map(r => `
+    <tr data-id="${r._id}" class="${r.isNew ? "new" : ""} ${r.deleted ? "deleted" : ""} ${r.picked ? "picked" : ""}">
+      <td class="num"><input type="checkbox" data-pick ${r.picked ? "checked" : ""}></td>
+      ${FIELDS.map(f => cellHtml(r, f)).join("")}
+    </tr>`).join("") ||
+    `<tr><td colspan="${FIELDS.length + 1}" class="muted" style="padding:16px; text-align:center">행이 없습니다.</td></tr>`;
+  renderInfo();
+}
+
+function renderInfo() {
+  const n = changedCount();
+  const shown = $("body").querySelectorAll("tr[data-id]").length;
+  const prints = rows.filter(r => !r.deleted && isPrint(r.cur.type)).length;
+  $("info").textContent = `${shown}/${rows.length}행 표시 · 지면 ${prints}행` + (n ? ` · 수정 ${n}행 (저장 안 됨)` : "");
+  $("btn-save").textContent = n ? `저장 (${n})` : "저장";
+}
+
+const rowOf = (el) => rows.find(r => r._id === Number(el.closest("tr").dataset.id));
+
+// ---------------- 편집 ----------------
+
+$("body").addEventListener("input", (e) => {
+  const f = e.target.dataset.f;
+  if (!f) return;
+  const r = rowOf(e.target);
+  r.cur[f] = e.target.value;
+  problems.delete(`${r._id}:${f}`);
+  const td = e.target.closest("td");
+  td.classList.toggle("dirty", !r.isNew && isDirty(r, f));
+  td.classList.remove("bad");
+  td.title = !r.isNew && isDirty(r, f) ? `원래 값: ${r.orig[f] ?? ""}` : "";
+  renderInfo();
+});
+
+$("body").addEventListener("change", (e) => {
+  if (e.target.dataset.pick === undefined) return;
+  const r = rowOf(e.target);
+  r.picked = e.target.checked;
+  e.target.closest("tr").classList.toggle("picked", r.picked);
+});
+
+$("head").addEventListener("click", (e) => {
+  if (e.target.id === "pick-all") {
+    const on = e.target.checked;
+    const ids = new Set([...$("body").querySelectorAll("tr[data-id]")].map(tr => Number(tr.dataset.id)));
+    for (const r of rows) if (ids.has(r._id)) r.picked = on;
+    render();
+    return;
+  }
+  const name = e.target.closest("th")?.dataset.sort;
+  if (!name) return;
+  sortBy = sortBy && sortBy.name === name ? (sortBy.dir > 0 ? { name, dir: -1 } : null) : { name, dir: 1 };
+  render();
+});
+
+// 엑셀처럼 방향키·Enter로 칸 이동, Ctrl+S 저장
+function focusCell(tr, col) {
+  if (!tr) return;
+  const cell = tr.children[col]?.querySelector("input:not([type=checkbox]), select");
+  if (cell) { cell.focus(); if (cell.select && cell.tagName === "INPUT") cell.select(); }
+}
+
+$("body").addEventListener("keydown", (e) => {
+  const el = e.target;
+  if (!el.dataset.f) return;
+  const td = el.closest("td"), tr = td.closest("tr");
+  const col = [...tr.children].indexOf(td);
+  const atStart = el.tagName !== "INPUT" || (el.selectionStart === 0 && el.selectionEnd === 0);
+  const atEnd = el.tagName !== "INPUT" || el.selectionStart === el.value.length;
+  // 드롭다운(분류)에서도 위아래 방향키는 칸 이동. 값은 마우스나 Alt+↓로 고른다
+  if (e.altKey) return;
+  if (e.key === "ArrowDown" || (e.key === "Enter" && !e.shiftKey)) { e.preventDefault(); focusCell(tr.nextElementSibling, col); }
+  else if (e.key === "ArrowUp" || (e.key === "Enter" && e.shiftKey)) { e.preventDefault(); focusCell(tr.previousElementSibling, col); }
+  else if (e.key === "ArrowLeft" && atStart) { e.preventDefault(); focusCell(tr, col - 1); }
+  else if (e.key === "ArrowRight" && atEnd) { e.preventDefault(); focusCell(tr, col + 1); }
+  else if (e.key === "Escape" && el.tagName === "INPUT") {
+    // 이 칸만 원래 값으로
+    const r = rowOf(el);
+    el.value = r.orig[el.dataset.f] ?? "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+});
+
+// 엑셀에서 여러 칸을 복사해 붙여넣으면 지금 칸부터 오른쪽·아래로 채운다
+$("body").addEventListener("paste", (e) => {
+  const el = e.target;
+  if (!el.dataset.f) return;
+  const text = e.clipboardData.getData("text/plain").replace(/\r/g, "").replace(/\n$/, "");
+  if (!text.includes("\t") && !text.includes("\n")) return;
+  e.preventDefault();
+  const trs = [...$("body").querySelectorAll("tr[data-id]")];
+  const startRow = trs.indexOf(el.closest("tr"));
+  const startCol = FIELDS.findIndex(f => f.name === el.dataset.f);
+  text.split("\n").forEach((line, i) => {
+    const tr = trs[startRow + i];
+    if (!tr) return;
+    const r = rows.find(x => x._id === Number(tr.dataset.id));
+    line.split("\t").forEach((value, j) => {
+      const f = FIELDS[startCol + j];
+      if (!f || f.readonly) return;
+      r.cur[f.name] = value.trim();
+      problems.delete(`${r._id}:${f.name}`);
+    });
+  });
+  render();
+});
+
+$("btn-add").addEventListener("click", () => {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const empty = Object.fromEntries(FIELDS.map(f => [f.name, ""]));
+  const r = { _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, date: today, type: "온라인" }, deleted: false, isNew: true };
+  rows.unshift(r);
+  sortBy = null;
+  $("filter").value = "";
+  $("type-filter").value = "";
+  render();
+  focusCell($("body").querySelector(`tr[data-id="${r._id}"]`), 3);
+});
+
+$("btn-delete").addEventListener("click", () => {
+  const picked = rows.filter(r => r.picked);
+  if (!picked.length) { alert("먼저 왼쪽 칸을 체크하세요."); return; }
+  const undo = picked.every(r => r.deleted);
+  for (const r of picked) {
+    if (r.isNew && !undo) rows = rows.filter(x => x !== r);  // 저장 전 새 행은 바로 없앤다
+    else r.deleted = !undo;
+    r.picked = false;
+  }
+  render();
+});
+
+// 체크한 행 분류 한 번에 바꾸기
+function fillBulkCategory() {
+  $("bulk-category").innerHTML = `<option value="" disabled selected>체크한 행 분류</option>` +
+    categories.map(c => `<option>${esc(c)}</option>`).join("") + `<option value="__clear">선택(빈 값)으로</option>`;
+}
+$("bulk-category").addEventListener("change", (e) => {
+  const value = e.target.value === "__clear" ? "" : e.target.value;
+  e.target.selectedIndex = 0;
+  const picked = rows.filter(r => r.picked && !r.deleted);
+  if (!picked.length) { alert("먼저 왼쪽 칸을 체크하세요."); return; }
+  for (const r of picked) { r.cur.category = value; problems.delete(`${r._id}:category`); }
+  render();
+  message("warn", `${picked.length}행의 분류를 '${esc(value || "선택")}'(으)로 바꿨습니다(노란 칸). <b>저장</b>을 눌러야 DB에 들어갑니다.`);
+});
+
+$("btn-undo").addEventListener("click", () => {
+  if (!changedCount() || !confirm("저장하지 않은 수정을 모두 되돌릴까요?")) return;
+  rows = rows.filter(r => !r.isNew);
+  for (const r of rows) { r.cur = { ...r.orig }; r.deleted = false; }
+  problems.clear();
+  render();
+});
+
+$("btn-reload").addEventListener("click", () => reload(true));
+$("filter").addEventListener("input", render);
+$("type-filter").addEventListener("change", render);
+
+// ---------------- 저장 ----------------
+
+async function save() {
+  if (!changedCount()) { message("ok", "바뀐 내용이 없습니다."); return; }
+  const sent = rows.filter(r => !r.deleted);
+  const deleted = rows.filter(r => r.deleted && !r.isNew).length;
+  if (deleted && !confirm(`${deleted}행을 DB에서 지웁니다. 저장할까요?`)) return;
+  const btn = $("btn-save");
+  btn.disabled = true;
+  try {
+    const body = { revision, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
+    const result = await api("/api/archive/rows", { method: "PUT", body });
+    load(result);
+    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (DB ${result.total}행` +
+      (result.added ? ` · 추가 ${result.added}` : "") + (result.deleted ? ` · 삭제 ${result.deleted}` : "") + ")";
+    text += "\n연번은 게재일시 최신순으로 다시 매겨졌습니다.";
+    message(result.warnings.length ? "warn" : "ok", esc(text + (result.warnings.length ? "\n\n" + result.warnings.join("\n") : "")));
+  } catch (err) {
+    if (err.problems && err.problems.length) {
+      problems.clear();
+      for (const p of err.problems) problems.set(`${sent[p.index]._id}:${p.field}`, p.message);
+      render();
+      const list = err.problems.slice(0, 20).map(p => {
+        const r = sent[p.index];
+        const where = r.isNew ? "새 행" : `연번 ${r.seq}`;
+        const label = FIELDS.find(f => f.name === p.field)?.header || p.field;
+        return `• <span class="link" data-goto="${r._id}" data-field="${p.field}">${where} ${label}</span>: ${esc(p.message)}`;
+      }).join("\n");
+      message("error", `저장하지 못했습니다. ${esc(err.message)} (빨간 칸)\n${list}` +
+        (err.problems.length > 20 ? `\n… 외 ${err.problems.length - 20}곳` : ""));
+    } else {
+      message("error", `저장하지 못했습니다. ${esc(err.message)}`);
+    }
+  } finally { btn.disabled = false; }
+}
+$("btn-save").addEventListener("click", save);
+
+// 메시지·결과에서 행을 누르면 표의 그 칸으로 이동
+function gotoCell(id, field) {
+  let tr = $("body").querySelector(`tr[data-id="${id}"]`);
+  if (!tr) {  // 골라 보기에 가려져 있으면 풀고 다시
+    $("filter").value = ""; $("type-filter").value = ""; render();
+    tr = $("body").querySelector(`tr[data-id="${id}"]`);
+  }
+  if (!tr) return;
+  const col = FIELDS.findIndex(f => f.name === field) + 1;
+  tr.scrollIntoView({ block: "center" });
+  const td = tr.children[Math.max(col, 1)];
+  td.classList.remove("flash"); void td.offsetWidth; td.classList.add("flash");
+  focusCell(tr, Math.max(col, 1));
+}
+$("body").addEventListener("click", (e) => {
+  if (e.target.dataset.openUrl === undefined) return;
+  const url = e.target.closest("td").querySelector("input").value.trim();
+  if (/^https?:\/\//.test(url)) window.open(url, "_blank", "noopener");
+  else alert("http로 시작하는 URL이 아닙니다.");
+});
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-goto]");
+  if (t) gotoCell(Number(t.dataset.goto), t.dataset.field || "date");
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (changedCount()) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// ---------------- 지면보도 날짜 확인 ----------------
+
+const STATUS = {
+  mismatch: "틀림", suspect: "일치 의심", parse_error: "파일명 오류", no_match: "DB에 없음", duplicate: "중복 파일", ok: "일치",
+};
+
+function remember(key, value) { try { localStorage.setItem(key, value); } catch {} }
+function recall(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
+
+$("btn-check").addEventListener("click", async () => {
+  $("check-panel").style.display = "block";
+  if (!$("folder").value) {
+    $("folder").value = recall("newspaper-folder");
+    if (!$("folder").value) {
+      try { $("folder").value = (await api("/api/print-check/folder")).folder; } catch {}
+    }
+  }
+  if ($("folder").value) runCheck({ folder: $("folder").value });
+  else $("folder").focus();
+});
+$("btn-close-check").addEventListener("click", () => { $("check-panel").style.display = "none"; });
+$("btn-run-check").addEventListener("click", () => {
+  remember("newspaper-folder", $("folder").value.trim());
+  runCheck({ folder: $("folder").value.trim() });
+});
+$("btn-pick").addEventListener("click", () => $("picker").click());
+$("picker").addEventListener("change", (e) => {
+  const names = [...e.target.files].map(f => f.webkitRelativePath || f.name);
+  e.target.value = "";
+  if (names.length) runCheck({ names });
+});
+
+let lastSource = null;   // 마지막으로 비교한 폴더(또는 파일명 목록). 연결·등록 뒤 다시 비교할 때 씀
+let linkOpen = null;     // 연결할 DB 행을 고르는 중인 파일 (checkResult.files 번호)
+
+async function runCheck(source, keepTab = false) {
+  lastSource = source;
+  linkOpen = null;
+  if (!keepTab) {
+    $("check-summary").innerHTML = `<div class="muted">비교하는 중…</div>`;
+    $("check-result").innerHTML = "";
+    $("check-tabs").innerHTML = "";
+  }
+  // 표의 지금 값(저장 전 수정 포함)으로 비교. seq 자리에 표의 행 번호(_id)를 넣어 보낸다
+  const current = rows.filter(r => !r.deleted && isPrint(r.cur.type))
+    .map(r => ({ seq: r._id, date: r.cur.date, press: r.cur.press, type: r.cur.type, title: r.cur.title }));
+  try {
+    checkResult = await api("/api/print-check", { method: "POST", body: { ...source, rows: current } });
+    // 일치 의심은 사람이 보고 고르도록 처음엔 체크하지 않는다
+    for (const f of checkResult.files) if (f.status === "suspect") f.picked = false;
+    const s = checkResult.summary;
+    if (!keepTab) checkTab = s.mismatch + s.suspect + s.parse_error + s.no_match + s.duplicate ? "problem" : "all";
+    renderCheck();
+  } catch (err) {
+    $("check-summary").innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
+  }
+}
+
+const seqOf = (id) => {
+  const r = rows.find(x => x._id === id);
+  return r ? (r.isNew ? "새 행" : r.seq) : "?";
+};
+
+function renderCheck() {
+  const s = checkResult.summary;
+  const fixable = checkResult.files.filter(f => (f.status === "mismatch" || f.status === "suspect") && Object.keys(f.fix).length).length;
+  $("check-summary").innerHTML = `<div class="msg ${s.mismatch || s.suspect || s.parse_error || s.no_match || s.duplicate ? "warn" : "ok"}">` +
+    `${esc(checkResult.source)}: 파일 ${s.files}개 ↔ DB 지면 ${s.print_rows}행\n` +
+    `일치 ${s.ok} · 틀림 ${s.mismatch} · 일치 의심 ${s.suspect} · 파일명 오류 ${s.parse_error} · DB에 없음 ${s.no_match} · 중복 파일 ${s.duplicate}` +
+    ` · 파일 없는 DB 지면 행 ${s.missing}` +
+    (s.suspect ? `\n일치 의심은 제목이 달라 확실하지 않은 짝입니다. 이유와 DB 제목을 보고 맞으면 체크하세요.` : "") +
+    (fixable ? `\n고칠 수 있는 ${fixable}건은 아래에서 체크한 뒤 "표에 반영" → "저장"으로 고칠 수 있습니다.` : "") + `</div>`;
+
+  const tabs = [
+    ["problem", `확인 필요 (${s.mismatch + s.suspect + s.parse_error + s.no_match + s.duplicate})`],
+    ["all", `전체 파일 (${s.files})`],
+    ["missing", `파일 없는 DB 지면 행 (${s.missing})`],
+  ];
+  $("check-tabs").innerHTML = tabs.map(([k, label]) =>
+    `<button data-tab="${k}" class="${checkTab === k ? "on" : ""}">${label}</button>`).join("") +
+    (fixable ? `<span class="sep"></span><button id="btn-apply" class="primary">체크한 수정을 표에 반영</button>` : "");
+
+  if (checkTab === "missing") {
+    $("check-result").innerHTML = checkResult.missing.length ? `<table class="result">
+      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th></tr></thead><tbody>` +
+      checkResult.missing.map(m => `<tr>
+        <td><span class="link" data-goto="${m.seq}" data-field="date">${esc(seqOf(m.seq))}</span></td>
+        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td></tr>`).join("") +
+      `</tbody></table><div class="note">파일 날짜 범위(앞뒤 3일) 안에 있는데 짝이 되는 파일이 없는 DB 지면 행입니다.</div>`
+      : `<div class="muted">없습니다.</div>`;
+    return;
+  }
+  const list = checkResult.files.filter(f => checkTab === "all" || f.status !== "ok");
+  $("check-result").innerHTML = list.length ? `<table class="result">
+    <thead><tr><th>고치기</th><th>상태</th><th>파일</th><th>오류 부분 (파일 ↔ DB)</th><th>DB 행</th></tr></thead><tbody>` +
+    list.map((f, i) => {
+      const idx = checkResult.files.indexOf(f);
+      const canFix = (f.status === "mismatch" || f.status === "suspect") && Object.keys(f.fix).length;
+      const probs = f.problems.map(p => `<div class="problem"><b>${esc(p.part)}</b> ` +
+        (p.db !== "" ? `<span class="vs">파일 <b>${esc(p.file)}</b> ↔ DB <b>${esc(p.db)}</b></span> ` : `<span class="vs">'${esc(p.file)}'</span> `) +
+        `<span class="note">${esc(p.message)}</span></div>`).join("");
+      const notes = (f.reasons && f.reasons.length ? `<div class="reason">의심 이유: ${esc(f.reasons.join(" · "))}</div>` : "") +
+        f.notes.map(n => `<div class="note">${esc(n)}</div>`).join("");
+      const row = (f.row ? `<span class="link" data-goto="${f.row.seq}" data-field="${f.problems[0]?.part === "지면" ? "type" : "date"}">연번 ${esc(seqOf(f.row.seq))}</span>
+        <div class="note">${esc(f.row.date)} · ${esc(f.row.press)} · ${esc(f.row.type)}</div>` : "") + actionsHtml(f, idx);
+      return `<tr>
+        <td>${canFix ? `<label title="표에 반영할 항목"><input type="checkbox" data-fix="${idx}" ${f.picked !== false ? "checked" : ""}></label>` : ""}</td>
+        <td><span class="badge ${f.status}">${STATUS[f.status]}</span></td>
+        <td style="max-width:360px; overflow-wrap:anywhere">${esc(f.file)}</td>
+        <td>${probs || `<span class="note">날짜 ${esc(f.date || "")} · 지면 ${esc(f.page_text || "")}</span>`}${notes}</td>
+        <td>${row}</td></tr>` + (linkOpen === idx ? pickerHtml(f, idx) : "");
+    }).join("") + `</tbody></table>` : `<div class="muted">확인이 필요한 파일이 없습니다. 모두 일치합니다.</div>`;
+}
+
+// ---------------- DB에 없음 → 연결 / 새로 등록 ----------------
+
+const normText = (t) => String(t || "").normalize("NFKC").toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+const sameName = (a, b) => { a = normText(a); b = normText(b); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
+const dayDiff = (a, b) => (a && b) ? Math.abs((new Date(a) - new Date(b)) / 86400000) : 999;
+// 파일명의 지면을 DB 구분 표기로 ("인물 29면" → "29면", "A16" → "A16면")
+const pageLabel = (f) => f.page ? `${f.page}면` : (f.page_text || "지면");
+
+function actionsHtml(f, idx) {
+  const out = [];
+  if (["no_match", "suspect", "duplicate"].includes(f.status) && f.title) {
+    out.push(`<button data-open-link="${idx}" title="이미 DB에 있는 기사(지면 행 또는 온라인 행)를 골라 이 파일과 연결합니다">${f.status === "no_match" ? "DB 기사와 연결" : "다른 행과 연결"}</button>`);
+  }
+  if (f.status === "no_match" && f.date && f.press && f.title) {
+    out.push(`<button data-register="${idx}" title="파일명의 매체·제목·지면·날짜로 새 지면 행을 표에 넣습니다 (저장해야 DB에 들어감)">새로 등록</button>`);
+  }
+  if (f.row && (f.status === "suspect" || f.linked) && normText(f.row.title) !== normText(f.title)) {
+    out.push(`<button data-retitle="${idx}" title="연결된 DB 지면 행의 제목을 파일(지면 기사)의 제목으로 바꿉니다">DB 제목을 지면 제목으로</button>`);
+  }
+  if (f.linked) out.push(`<button data-unlink="${idx}" title="직접 연결한 것을 끊고 다시 자동으로 찾습니다">연결 끊기</button>`);
+  return out.length ? `<div class="acts">${out.join("")}</div>` : "";
+}
+
+function candidatesFor(f, term) {
+  const t = normText(term);
+  return rows.filter(r => !r.deleted)
+    .filter(r => t ? normText(`${r.cur.press} ${r.cur.title}`).includes(t) : sameName(r.cur.press, f.press))
+    .map(r => ({ r, gap: dayDiff(f.date, r.cur.date) }))
+    // 날짜 가까운 순, 같으면 지면 행 먼저
+    .sort((a, b) => a.gap - b.gap || isPrint(b.r.cur.type) - isPrint(a.r.cur.type))
+    .slice(0, 30);
+}
+
+function pickerHtml(f, idx) {
+  return `<tr class="picker"><td colspan="5">
+    <div class="row"><b>연결할 DB 기사 고르기</b>
+      <input type="text" id="link-search" placeholder="제목·언론사로 찾기 (비우면 같은 매체를 날짜 가까운 순으로)" style="flex:1; min-width:240px">
+      <button data-close-link>닫기</button></div>
+    <div class="note">지면 행을 고르면 그 행과 연결해 날짜·지면을 비교합니다. 온라인·방송 행을 고르면 그 기사의 지면 행을 새로 만들어 연결합니다 (저장해야 DB에 들어감). 연결은 기억해 두어 다음 확인 때도 쓰입니다.</div>
+    <div class="cands" id="link-cands">${candsHtml(f, "")}</div>
+  </td></tr>`;
+}
+
+function candsHtml(f, term) {
+  const list = candidatesFor(f, term);
+  return list.map(({ r, gap }) => `<div class="cand">
+      <span class="badge ${isPrint(r.cur.type) ? "parse_error" : "no_match"}">${esc(r.cur.type)}</span>
+      <span class="note">${esc(r.cur.date)}${gap < 999 ? ` (${gap ? gap + "일 차이" : "같은 날"})` : ""}</span>
+      <span>${esc(r.cur.press)}</span>
+      <span class="t">${esc(r.cur.title)} <span class="note">${r.isNew ? "새 행" : "연번 " + r.seq}</span></span>
+      <button data-link-row="${r._id}">이 기사로 연결</button></div>`).join("") ||
+    `<div class="cand muted">${term ? "찾는 기사가 없습니다." : "같은 매체의 기사가 없습니다. 위 칸에서 제목으로 찾아보세요."}</div>`;
+}
+
+function newPrintRow(values) {
+  const empty = Object.fromEntries(FIELDS.map(fl => [fl.name, ""]));
+  const r = { _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, url: "-", ...values }, deleted: false, isNew: true };
+  rows.unshift(r);
+  return r;
+}
+
+async function linkTo(f, target) {
+  let r = target;
+  let made = false;
+  if (!isPrint(r.cur.type)) {
+    // 온라인·방송 행을 골랐으면: 같은 언론사·제목의 지면 행이 이미 있으면 그 행, 없으면 새로 만든다
+    r = rows.find(x => !x.deleted && isPrint(x.cur.type) && normText(x.cur.press) === normText(target.cur.press)
+                       && normText(x.cur.title) === normText(target.cur.title));
+    if (!r) {
+      r = newPrintRow({
+        date: f.date || target.cur.date, press: target.cur.press, type: pageLabel(f), title: target.cur.title,
+        published_at: target.cur.published_at, keywords: target.cur.keywords, category: target.cur.category,
+      });
+      made = true;
+    }
+  }
+  await api("/api/print-check/link", { method: "POST", body: { file: f.file, press: r.cur.press, title: r.cur.title } });
+  render();
+  message(made ? "warn" : "ok", made
+    ? `'${esc(target.cur.title)}' 기사의 지면 행(${esc(r.cur.type)}, ${esc(r.cur.date)})을 표 맨 위에 새로 만들고 연결했습니다. <b>저장</b>을 눌러야 DB에 들어갑니다.`
+    : `파일을 ${r.isNew ? "새 행" : "연번 " + r.seq}과 연결했습니다. 다시 비교한 결과를 확인하세요.`);
+  await runCheck(lastSource, true);
+}
+
+$("check-result").addEventListener("click", async (e) => {
+  const t = e.target;
+  try {
+    if (t.dataset.openLink !== undefined) {
+      linkOpen = Number(t.dataset.openLink);
+      renderCheck();
+      $("link-search")?.focus();
+    } else if (t.dataset.closeLink !== undefined) {
+      linkOpen = null;
+      renderCheck();
+    } else if (t.dataset.linkRow) {
+      await linkTo(checkResult.files[linkOpen], rows.find(r => r._id === Number(t.dataset.linkRow)));
+    } else if (t.dataset.register !== undefined) {
+      const f = checkResult.files[Number(t.dataset.register)];
+      const r = newPrintRow({
+        date: f.date, press: f.press, type: pageLabel(f), title: f.title, published_at: `${f.date}T00:00:00+09:00`,
+      });
+      render();
+      message("warn", `새 지면 행을 표 맨 위에 넣었습니다 (${esc(r.cur.press)} · ${esc(r.cur.type)} · ${esc(r.cur.date)}). 분류 등을 채운 뒤 <b>저장</b>을 눌러야 DB에 들어갑니다.`);
+      await runCheck(lastSource, true);
+    } else if (t.dataset.retitle !== undefined) {
+      const f = checkResult.files[Number(t.dataset.retitle)];
+      const r = rows.find(x => x._id === f.row.seq);
+      if (!r || !confirm(`DB 지면 행 제목을 바꿀까요?\n\n지금: ${r.cur.title}\n바꿀 제목: ${f.title}`)) return;
+      const old = r.cur.title;
+      await api("/api/archive/title-alias", { method: "POST", body: { press: r.cur.press, old, new: f.title } });
+      r.cur.title = f.title;
+      problems.delete(`${r._id}:title`);
+      render();
+      message("warn", `${r.isNew ? "새 행" : "연번 " + r.seq}의 제목을 지면 기사 제목으로 바꿨습니다(노란 칸). <b>저장</b>을 눌러야 DB에 들어갑니다. 온라인 행 제목은 그대로입니다.`);
+      await runCheck(lastSource, true);
+    } else if (t.dataset.unlink !== undefined) {
+      await api("/api/print-check/link", { method: "POST", body: { file: checkResult.files[Number(t.dataset.unlink)].file } });
+      await runCheck(lastSource, true);
+    }
+  } catch (err) { alert(err.message); }
+});
+
+$("check-result").addEventListener("input", (e) => {
+  if (e.target.id === "link-search" && linkOpen !== null) {
+    $("link-cands").innerHTML = candsHtml(checkResult.files[linkOpen], e.target.value);
+  }
+});
+
+$("check-tabs").addEventListener("click", (e) => {
+  if (e.target.dataset.tab) { checkTab = e.target.dataset.tab; renderCheck(); }
+  if (e.target.id === "btn-apply") applyFixes();
+});
+$("check-result").addEventListener("change", (e) => {
+  if (e.target.dataset.fix !== undefined) checkResult.files[Number(e.target.dataset.fix)].picked = e.target.checked;
+});
+
+function applyFixes() {
+  let count = 0;
+  for (const f of checkResult.files) {
+    if ((f.status !== "mismatch" && f.status !== "suspect") || f.picked === false || !f.row) continue;
+    const r = rows.find(x => x._id === f.row.seq);
+    if (!r || r.deleted) continue;
+    for (const [field, value] of Object.entries(f.fix)) {
+      if (r.cur[field] !== value) { r.cur[field] = value; problems.delete(`${r._id}:${field}`); count++; }
+    }
+    f.status = "ok";
+    f.notes.push("표에 반영함 (저장 전)");
+  }
+  render();
+  renderCheck();
+  message(count ? "warn" : "ok", count
+    ? `${count}칸을 표에 반영했습니다(노란 칸). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`
+    : "반영할 수정이 없습니다.");
+}
+
+// ---------------- 붙여넣어 가져오기 ----------------
+
+// 머리글 이름 → 열. 엑셀 내보내기·CSV 사본·예전 DB에서 쓸 법한 이름
+const IMPORT_HEADERS = {
+  date: ["날짜", "일자", "보도일", "보도일자", "게재일", "date"],
+  press: ["언론사명", "언론사", "매체", "매체명", "press"],
+  type: ["구분", "유형", "type"],
+  title: ["제목", "기사제목", "title"],
+  url: ["url", "링크", "주소", "기사url"],
+  published_at: ["게재일시", "published_at"],
+  keywords: ["키워드", "keywords"],
+  category: ["분류", "category"],
+};
+// 머리글이 없을 때: 엑셀 내보내기 순서 (연번, 날짜, 언론사명, 구분, 제목, URL)
+const EXCEL_ORDER = [null, "date", "press", "type", "title", "url"];
+let importResult = null;
+let importTab = "add";
+
+// 엑셀 복사(탭) 또는 CSV(쉼표) 글을 칸 배열로. 따옴표로 감싼 칸(줄바꿈·쉼표 포함)도 읽는다
+function parseTable(text) {
+  text = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const firstLine = text.split("\n", 1)[0];
+  const sep = firstLine.includes("\t") ? "\t" : ",";
+  const rowsOut = [];
+  let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === "") quoted = true;
+    else if (ch === sep) { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell); rowsOut.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rowsOut.push(row); }
+  return rowsOut.filter(r => r.some(c => c.trim() !== ""));
+}
+
+function normHeader(h) { return h.replace(/\s|\(.*?\)/g, "").toLowerCase(); }
+
+function importDate(text) {
+  const t = text.trim();
+  let m = t.match(/^(\d{2,4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})/);
+  if (!m && /^\d{8}$/.test(t)) m = [t, t.slice(0, 4), t.slice(4, 6), t.slice(6, 8)];
+  if (m) {
+    let y = Number(m[1]); if (y < 100) y += 2000;
+    const d = new Date(Date.UTC(y, Number(m[2]) - 1, Number(m[3])));
+    if (d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3])) return d.toISOString().slice(0, 10);
+    return null;
+  }
+  if (/^\d{5}(\.\d+)?$/.test(t)) {  // 엑셀 날짜 일련번호
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(t)) * 86400000).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function previewImport() {
+  const table = parseTable($("import-text").value);
+  if (!table.length) { $("import-summary").innerHTML = `<div class="msg error">붙여넣은 내용이 없습니다.</div>`; return; }
+  // 머리글 찾기
+  const header = table[0].map(normHeader);
+  let map = header.map(h => Object.keys(IMPORT_HEADERS).find(k => IMPORT_HEADERS[k].some(a => normHeader(a) === h)) || null);
+  let body = table.slice(1), headerNote;
+  if (!map.includes("date") || !map.includes("title")) {
+    if (table[0].length === 6 && importDate(table[0][1] || "")) {
+      map = EXCEL_ORDER; body = table;
+      headerNote = "머리글이 없어 엑셀 내보내기 순서(연번·날짜·언론사명·구분·제목·URL)로 읽었습니다.";
+    } else {
+      $("import-summary").innerHTML = `<div class="msg error">머리글 행에서 날짜·제목 열을 찾지 못했습니다. 첫 줄에 머리글(날짜, 언론사명, 구분, 제목, URL …)을 포함해 복사해 주세요.\n읽은 첫 줄: ${esc(table[0].join(" | "))}</div>`;
+      return;
+    }
+  } else {
+    const used = map.filter(Boolean).map(k => FIELDS.find(f => f.name === k).header);
+    const ignored = table[0].filter((h, i) => !map[i] && h.trim());
+    headerNote = `읽은 열: ${used.join(", ")}` + (ignored.length ? ` · 무시한 열: ${ignored.join(", ")}` : "");
+  }
+
+  // 지금 표(삭제 표시 제외)에 있는 행과 비교
+  const keyOf = (r) => isPrint(r.type) ? `p|${r.press}|${r.title}` : `d|${r.url}|${r.type}`;
+  const have = new Map();
+  for (const r of rows) if (!r.deleted) have.set(keyOf(r.cur), r.isNew ? "새 행" : `연번 ${r.seq}`);
+
+  const items = body.map((cells, i) => {
+    const raw = {};
+    map.forEach((k, j) => { if (k) raw[k] = (cells[j] ?? "").trim(); });
+    const r = Object.fromEntries(EDITABLE.map(n => [n, raw[n] || ""]));
+    const errors = [];
+    const date = importDate(raw.date || "");
+    if (date) r.date = date; else errors.push(`날짜 '${raw.date || ""}'를 읽을 수 없음`);
+    if (!r.type) r.type = r.url && r.url !== "-" ? "온라인" : "";
+    for (const [n, label] of [["press", "언론사명"], ["type", "구분"], ["title", "제목"]]) if (!r[n]) errors.push(`${label} 없음`);
+    if (r.type && isPrint(r.type)) r.url = r.url || "-";
+    else if (r.type && !/^https?:\/\//.test(r.url)) errors.push(`URL '${r.url}'이 http로 시작하지 않음`);
+    if (!r.published_at && date) r.published_at = `${date}T00:00:00+09:00`;
+    if (r.category && !categories.includes(r.category)) errors.push(`분류 '${r.category}'는 목록에 없음`);
+    const line = i + (body === table ? 1 : 2);
+    if (errors.length) return { line, row: r, status: "bad", note: errors.join(", ") };
+    const key = keyOf(r);
+    if (have.has(key)) return { line, row: r, status: "dup", note: `이미 있음 (${have.get(key)})` };
+    have.set(key, `붙여넣은 ${line}번째 줄`);
+    return { line, row: r, status: "add", note: "" };
+  });
+  importResult = { items, headerNote };
+  importTab = items.some(x => x.status === "bad") ? "bad" : "add";
+  renderImport();
+}
+
+function renderImport() {
+  const { items, headerNote } = importResult;
+  const n = (s) => items.filter(x => x.status === s).length;
+  $("import-summary").innerHTML = `<div class="msg ${n("bad") ? "warn" : "ok"}">${esc(headerNote)}\n` +
+    `붙여넣은 ${items.length}줄 → 추가 ${n("add")} · 이미 있음 ${n("dup")} · 형식 오류 ${n("bad")}` +
+    (n("bad") ? "\n형식 오류 줄은 넣지 않습니다. 엑셀에서 고쳐 다시 붙여넣거나, 넣은 뒤 표에서 직접 추가하세요." : "") + `</div>`;
+  const tabs = [["add", `추가할 행 (${n("add")})`], ["dup", `이미 있음 (${n("dup")})`], ["bad", `형식 오류 (${n("bad")})`]];
+  $("import-tabs").innerHTML = tabs.map(([k, l]) => `<button data-itab="${k}" class="${importTab === k ? "on" : ""}">${l}</button>`).join("") +
+    (n("add") ? `<span class="sep"></span><button id="btn-import-apply" class="primary">${n("add")}행을 표에 넣기</button>` : "");
+  const list = items.filter(x => x.status === importTab);
+  const label = { add: "추가", dup: "이미 있음", bad: "오류" };
+  $("import-result").innerHTML = list.length ? `<table class="result"><thead><tr><th>줄</th><th>상태</th>` +
+    `<th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th><th>URL</th><th>분류</th><th>내용</th></tr></thead><tbody>` +
+    list.slice(0, 500).map(x => `<tr><td>${x.line}</td><td><span class="badge ${x.status}">${label[x.status]}</span></td>
+      <td>${esc(x.row.date)}</td><td>${esc(x.row.press)}</td><td>${esc(x.row.type)}</td><td>${esc(x.row.title)}</td>
+      <td style="max-width:220px; overflow-wrap:anywhere">${esc(x.row.url)}</td><td>${esc(x.row.category)}</td>
+      <td class="note">${esc(x.note)}</td></tr>`).join("") + `</tbody></table>` +
+    (list.length > 500 ? `<div class="note">… 외 ${list.length - 500}줄</div>` : "")
+    : `<div class="muted">없습니다.</div>`;
+}
+
+function applyImport() {
+  const add = importResult.items.filter(x => x.status === "add");
+  const empty = Object.fromEntries(FIELDS.map(f => [f.name, ""]));
+  const added = add.map(x => ({ _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, ...x.row }, deleted: false, isNew: true }));
+  rows = [...added, ...rows];
+  sortBy = null; $("filter").value = ""; $("type-filter").value = "";
+  render();
+  $("import-panel").style.display = "none";
+  $("import-text").value = "";
+  importResult = null;
+  message("warn", `${added.length}행을 표 맨 위에 넣었습니다(연번 초록색). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`);
+}
+
+$("btn-import").addEventListener("click", () => {
+  $("import-panel").style.display = "block";
+  $("import-text").focus();
+});
+$("btn-import-close").addEventListener("click", () => { $("import-panel").style.display = "none"; });
+$("btn-import-preview").addEventListener("click", previewImport);
+$("import-text").addEventListener("paste", () => setTimeout(previewImport, 0));
+$("btn-import-file").addEventListener("click", () => $("import-file").click());
+$("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const buf = await file.arrayBuffer();
+  let text = new TextDecoder("utf-8").decode(buf);
+  if (text.includes("�")) text = new TextDecoder("euc-kr").decode(buf);  // 엑셀이 저장한 한글 CSV(CP949)
+  $("import-text").value = text;
+  previewImport();
+});
+$("import-tabs").addEventListener("click", (e) => {
+  if (e.target.dataset.itab) { importTab = e.target.dataset.itab; renderImport(); }
+  if (e.target.id === "btn-import-apply") applyImport();
+});
+
+// ---------------- 시작 ----------------
+document.body.insertAdjacentHTML("beforeend",
+  `<datalist id="type-list"><option>온라인</option><option>방송</option><option>A1면</option></datalist>`);
+reload(false);
+api("/api/status").then(info => { $("version").textContent = `v${info.version}`; }).catch(() => {});
+</script>
+</body>
+</html>

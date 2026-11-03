@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoodMorningKOITA</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <style>
   :root {
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
@@ -60,11 +64,17 @@
   .del:hover { color: var(--red); }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
   .error { background: #fee2e2; color: var(--red); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;
-           white-space: pre-wrap; }
+           white-space: pre-wrap; overflow-wrap: anywhere; }
   .count { color: var(--muted); font-weight: 400; }
+  select.category { padding: 3px 6px; font-size: 13px; }
+  select.category.unset { color: var(--muted); }
+  a.button { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px;
+             color: var(--text); text-decoration: none; background: var(--panel); }
+  a.button:hover { border-color: var(--accent); }
   @media (max-width: 720px) {
     main, header { padding: 12px 16px; }
     .hide-sm { display: none; }
+    #articles-wrap { overflow-x: auto; }
   }
 </style>
 </head>
@@ -87,6 +97,10 @@
   <div class="row">
     <button id="btn-export" title="체크한 기사만 엑셀로 내려받기">엑셀 다운로드</button>
     <button id="btn-archive" title="체크한 기사를 database 폴더의 DB 맨 아래에 추가 (이미 있는 기사는 건너뜀)">DB 저장</button>
+    <select id="bulk-category" title="체크한 기사들의 분류를 한 번에 고르기">
+      <option value="" disabled selected>체크한 기사 분류</option>
+    </select>
+    <a class="button" href="/editor" target="_blank" title="기사 DB를 엑셀처럼 직접 고치는 창 (지면보도 날짜 확인 포함)">DB 편집</a>
     <span class="kw" id="archive-info"></span>
   </div>
 </header>
@@ -131,19 +145,23 @@
       </div>
     </div>
     <div id="errors"></div>
-    <table>
+    <div id="articles-wrap"><table>
       <thead><tr>
         <th class="check"><input type="checkbox" id="check-all" title="보이는 기사 모두 체크/해제"></th>
-        <th>시간</th><th>언론사</th><th>구분</th><th>출처</th><th>제목</th><th class="hide-sm">키워드</th><th></th>
+        <th>시간</th><th>언론사</th><th>구분</th><th>출처</th><th>제목</th><th class="hide-sm">키워드</th><th title="골라 두고 DB 저장을 누르면 기사 DB 맨 오른쪽 '분류' 열에 저장됩니다">분류</th><th></th>
       </tr></thead>
       <tbody id="articles"></tbody>
-    </table>
+    </table></div>
   </section>
 </main>
 
 <script>
+// 앱 설치(PWA): 폰 홈 화면·PC 앱 창으로 설치할 수 있게 서비스 워커 등록
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
 const $ = (id) => document.getElementById(id);
 let articles = [];
+let categories = [];  // 분류 목록 (서버에서 받음)
 const checked = new Set();  // 체크한 기사 id
 
 async function api(path, options = {}) {
@@ -284,6 +302,7 @@ function renderSelection() {
   const n = checked.size;
   $("btn-export").textContent = n ? `엑셀 다운로드 (${n})` : "엑셀 다운로드";
   $("btn-archive").textContent = n ? `DB 저장 (${n})` : "DB 저장";
+  $("bulk-category").options[0].textContent = n ? `체크한 ${n}건 분류` : "체크한 기사 분류";
   const visibleChecked = list.filter(a => checked.has(a.id)).length;
   $("check-all").checked = list.length > 0 && visibleChecked === list.length;
   $("check-all").indeterminate = visibleChecked > 0 && visibleChecked < list.length;
@@ -313,12 +332,27 @@ function renderArticles() {
         <div class="desc">${esc(a.description)}</div>
       </td>
       <td class="kw hide-sm">${esc(a.keywords)}</td>
+      <td><select class="category ${a.category ? "" : "unset"}" data-category="${a.id}" title="분류">
+        <option value="">선택</option>
+        ${categories.map(c => `<option ${c === a.category ? "selected" : ""}>${esc(c)}</option>`).join("")}
+      </select></td>
       <td><button class="del" data-del="${a.id}" title="목록과 DB에서 삭제">✕</button></td>
-    </tr>`).join("") || `<tr><td colspan="8" class="empty">해당 기간의 기사가 없습니다.</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="9" class="empty">해당 기간의 기사가 없습니다.</td></tr>`;
   renderSelection();
 }
 
-$("articles").addEventListener("change", (e) => {
+$("articles").addEventListener("change", async (e) => {
+  if (e.target.dataset.category) {
+    // 분류는 고르는 즉시 기억해 두고, DB 저장을 누를 때 기사 DB에 들어간다
+    const a = articles.find(x => x.id === Number(e.target.dataset.category));
+    const value = e.target.value;
+    try {
+      await api(`/api/articles/${a.id}`, { method: "PATCH", body: { category: value } });
+      a.category = value;
+      e.target.classList.toggle("unset", !value);
+    } catch (err) { alert(err.message); e.target.value = a.category || ""; }
+    return;
+  }
   const id = Number(e.target.dataset.check);
   if (!id) return;
   e.target.checked ? checked.add(id) : checked.delete(id);
@@ -427,6 +461,18 @@ $("btn-export").addEventListener("click", async () => {
   } catch (err) { alert(err.message); }
 });
 
+$("bulk-category").addEventListener("change", async (e) => {
+  const value = e.target.value === "__clear" ? "" : e.target.value;
+  e.target.selectedIndex = 0;
+  const ids = checkedIds();
+  if (!ids) return;
+  try {
+    await api("/api/articles/category", { method: "POST", body: { ids, category: value } });
+    for (const a of articles) if (checked.has(a.id)) a.category = value;
+    renderArticles();
+  } catch (err) { alert(err.message); }
+});
+
 $("btn-archive").addEventListener("click", async () => {
   const ids = checkedIds();
   if (!ids) return;
@@ -437,6 +483,7 @@ $("btn-archive").addEventListener("click", async () => {
     showArchiveInfo((await api("/api/status")).archive);
     let message = `DB에 ${r.added}행을 추가했습니다.`;
     if (r.skipped) message += ` (이미 있던 ${r.skipped}행은 건너뜀)`;
+    if (r.categorized) message += `\n이미 있던 ${r.categorized}행의 분류를 새로 고른 값으로 바꿨습니다.`;
     if (r.removed) message += `\n예전에 들어간 중복 ${r.removed}행도 정리했습니다.`;
     message += `\nDB는 게재일시 최신순으로 정렬됐습니다.`;
     message += `\nDB 누적 ${r.total}행`;
@@ -470,6 +517,9 @@ for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).a
   renderKeywords(await api("/api/keywords"));
   const info = await api("/api/status");
   $("version").textContent = `v${info.version}`;
+  categories = info.categories || [];
+  $("bulk-category").insertAdjacentHTML("beforeend",
+    categories.map(c => `<option>${esc(c)}</option>`).join("") + `<option value="__clear">선택으로 되돌리기</option>`);
   showArchiveInfo(info.archive);
   await collect(false);
 })();
