@@ -211,6 +211,22 @@ def trash_file(folder, name):
     return target
 
 
+def published_diff(rows):
+    """
+    지면 행인데 게재일시(published_at)의 날짜가 지면 날짜(date)와 다른 행.
+    고칠 값은 지면 날짜 00:00 (지면에는 시각이 없음). 반환: [{"seq", "date", "press", "type", "title", "published_at", "fix"}]
+    """
+    out = []
+    for r in rows:
+        kind, day = r.get("type") or "", r.get("date") or ""
+        if not kind or kind in ("온라인", "방송") or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            continue
+        if str(r.get("published_at") or "")[:10] != day:
+            out.append({k: r.get(k) for k in ("seq", "date", "press", "type", "title", "published_at")}
+                       | {"fix": f"{day}T00:00:00+09:00"})
+    return out
+
+
 def title_score(a, b):
     a, b = norm(a), norm(b)
     if not a or not b:

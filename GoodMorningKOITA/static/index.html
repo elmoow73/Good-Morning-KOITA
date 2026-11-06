@@ -107,6 +107,7 @@
       <option value="" disabled selected>체크한 기사 분류</option>
     </select>
     <a class="button" href="/editor" target="_blank" title="기사 DB를 엑셀처럼 직접 고치는 창 (지면보도 날짜 확인 포함)">DB 편집</a>
+    <a class="button" href="/analysis" target="_blank" title="그간 쌓은 기사 DB를 기간별로 분석하는 창 (구분·년도·월·분류·언론사별 건수)">DB 분석</a>
     <span class="kw" id="archive-info"></span>
   </div>
 </header>
@@ -549,10 +550,14 @@ $("date-to").addEventListener("change", loadArticles);
 $("filter").addEventListener("input", renderArticles);
 for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
+// 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
+function keepAlive(info) { if (info && info.window_mode && window.EventSource) new EventSource("/api/alive"); }
+
 // 첫 화면: 키워드를 보여주고, 바로 어제 0시부터의 기사를 검색
 (async () => {
   renderKeywords(await api("/api/keywords"));
   const info = await api("/api/status");
+  keepAlive(info);
   $("version").textContent = `v${info.version}`;
   categories = info.categories || [];
   $("bulk-category").insertAdjacentHTML("beforeend",

@@ -5,9 +5,13 @@
 ## 실행 (Windows)
 
 1. Python 3.10 이상이 설치되어 있어야 합니다.
-2. 이 폴더를 PC로 복사한 뒤 `run.bat`을 더블클릭합니다.
-   - 처음 한 번은 필요한 라이브러리를 설치하느라 1~2분 걸립니다.
-3. 브라우저에서 http://127.0.0.1:8000 이 자동으로 열립니다.
+2. 이 폴더를 PC로 복사한 뒤 **`GoodMorningKOITA.vbs`**를 더블클릭합니다 (v1.4.0~). 바탕화면 바로가기도 이 파일로 만들면 됩니다.
+   - 처음 한 번은 필요한 라이브러리를 설치하는 창이 뜨고 1~2분 걸립니다.
+3. 검은 CMD 창 없이 **프로그램 창**(엣지 앱 창, 엣지가 없으면 크롬·기본 브라우저)만 뜹니다.
+   - 첫 화면·DB 편집·DB 분석 창을 **모두 닫으면 20초쯤 뒤 프로그램도 끝납니다** (검색·DB 저장 중이면 끝난 뒤).
+   - 이미 켜져 있을 때 다시 실행하면 창만 하나 더 뜹니다. 다른 버전이 켜져 있으면 알려 주고 멈춥니다.
+   - 화면에 안 보이는 기록은 프로그램 폴더의 `goodmorning.log`에 남습니다.
+4. 문제를 확인할 때(디버그)는 예전처럼 `run.bat`을 실행하면 CMD 창에 기록이 보이고, 그 창을 닫으면 끝납니다.
 
 네이버 API 키는 `.env` 파일에 들어 있습니다. NAVER API HUB(네이버 클라우드 플랫폼 콘솔)의 Application 인증 정보(Client ID / Client Secret)를 넣으면 되고, 키를 바꾸면 이 파일만 고치면 됩니다.
 
@@ -96,7 +100,16 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
   - **DB 제목을 지면 제목으로**: 일치 의심(또는 직접 연결)인데 제목이 다를 때, DB 지면 행의 제목을 파일(지면 기사)의 제목으로 바꿉니다(온라인 행 제목은 그대로). 바꾼 기록은 `database/title_aliases.json`에 남겨, 기사 목록에서 같은 기사를 다시 DB 저장해도 예전 제목의 지면 행이 또 생기지 않습니다.
   - 일치 의심·중복 파일도 "다른 행과 연결"로 직접 짝을 바꿀 수 있습니다. 새로 만든 행은 **저장**해야 DB에 들어갑니다.
 - 고칠 항목을 체크하고 "체크한 수정을 표에 반영" → 노란 칸을 확인한 뒤 **저장**하면 DB가 고쳐집니다.
+- **게재일시 다름** 탭 (v1.4.0~): 지면 행인데 게재일시의 날짜가 지면 날짜와 다른 행을 모두 보여 줍니다(파일과 상관없이 표 전체, 저장 전 수정 반영). 체크한 행만 "체크한 게재일시를 표에 반영"으로 지면 날짜 00:00으로 바꾸고 **저장**합니다. 날짜를 고친 뒤 보면 바뀐 날짜 기준으로 다시 나옵니다.
 - 폰이나 클라우드 서버에서 쓸 때는 "폴더 직접 고르기"로 내 기기의 폴더를 고르면 파일명만 보내서 비교합니다(이미지는 올리지 않음).
+
+## DB 분석 창 (v1.4.0~)
+
+첫 화면 위쪽 **DB 분석** 버튼을 누르면 새 창이 열립니다.
+
+- 기간: 전체 / 올해 / 작년 / 이번 달 / 최근 12개월 / 날짜 지정 (DB의 '날짜' 열 기준)
+- 총 기사 · 온라인 · 지면 · 방송 건수와 비율, **년도별 · 월별 · 분류별 · 언론사별** 표와 막대그래프 (온라인·지면·방송 나눠서)
+- 건수는 **DB 행 수 기준**: 같은 기사가 온라인과 지면(또는 방송)으로 모두 있으면 각각 1건으로 셉니다. 분류를 안 고른 행은 "미분류".
 
 ## 화면 없이 실행 (AI 에이전트·예약 작업용)
 
@@ -105,10 +118,14 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 ```
 .venv\Scripts\python cli.py print-check                 # NEWSPAPER_DIR 폴더와 비교
 .venv\Scripts\python cli.py print-check --folder D:\지면 --apply   # 틀린 날짜·지면을 DB에 바로 고침
+.venv\Scripts\python cli.py print-check --fix-published   # 지면 행 게재일시를 지면 날짜 00:00으로 고침
 .venv\Scripts\python cli.py archive-rows                # 기사 DB 전체 행
+.venv\Scripts\python cli.py stats --from 2026-01-01 --to 2026-12-31   # DB 분석 (총·구분·년도·월·분류·언론사별 건수)
 ```
 
-웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows`(행과 `revision`), `PUT /api/archive/rows`(`{"revision", "rows"}`로 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김).
+`print-check` 결과의 `published_diff`에 게재일시가 지면 날짜와 다른 지면 행이 나옵니다.
+
+웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows`(행과 `revision`), `PUT /api/archive/rows`(`{"revision", "rows"}`로 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김), `GET /api/archive/stats?date_from=&date_to=`(DB 분석, `cli.py stats`와 같은 JSON).
 
 ## 기사 DB (다른 프로그램에서 읽기)
 
@@ -157,6 +174,10 @@ DB는 저장할 때마다 게재일시(published_at) 최신순(같은 기사의 
 | `archive.py` | 기사 DB 저장·편집 (`database` 폴더) |
 | `printcheck.py` | 지면보도 날짜 확인 (파일명 ↔ DB 지면 행 비교) |
 | `cli.py` | 화면 없이 실행 (JSON 출력) |
+| `GoodMorningKOITA.vbs`, `launcher.py`, `window.py` | CMD 창 없이 실행 (프로그램 창을 모두 닫으면 종료) |
+| `run.bat` | CMD 창에서 실행 (디버그용), `run.bat --setup`은 라이브러리 설치만 |
+| `stats.py` | DB 분석 집계 (DB 분석 창·`cli.py stats`) |
+| `static/analysis.html` | DB 분석 창 |
 | `static/editor.html` | DB 편집 창 |
 | `exporter.py` | 엑셀 만들기 |
 | `static/index.html` | 화면 |

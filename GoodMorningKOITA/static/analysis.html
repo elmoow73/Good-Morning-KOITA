@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoodMorningKOITA DB 분석</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+    --accent: #2457d6; --accent-soft: #e8eefc;
+    --online: #2457d6; --print: #d97706; --broadcast: #15803d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 24px;
+           display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 18px; margin: 0 8px 0 0; }
+  button, input, select { font: inherit; }
+  select, input[type=date] { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; }
+  button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; }
+  .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--panel); }
+  .card .label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .card .num { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .num small { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .card .pct { color: var(--muted); font-size: 12px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .dot.online { background: var(--online); } .dot.print { background: var(--print); } .dot.broadcast { background: var(--broadcast); }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); font-weight: 400; margin-left: auto; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap;
+           font-variant-numeric: tabular-nums; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  th:first-child, td:first-child { text-align: left; }
+  td.bar-cell { width: 45%; text-align: left; }
+  .bar { display: flex; height: 14px; border-radius: 3px; overflow: hidden; background: #f1f2f4; }
+  .bar span { display: block; height: 100%; }
+  .bar .online { background: var(--online); } .bar .print { background: var(--print); } .bar .broadcast { background: var(--broadcast); }
+  tr.zero td { color: #b6bcc6; }
+  .scroll { max-height: 480px; overflow: auto; }
+  .scroll thead th { position: sticky; top: 0; background: var(--panel); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .empty { color: var(--muted); padding: 16px; text-align: center; }
+  .error { background: #fee2e2; color: #b91c1c; border-radius: 6px; padding: 8px 12px; }
+  @media (max-width: 860px) {
+    .two { grid-template-columns: 1fr; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    header, main { padding: 12px 16px; }
+    td.bar-cell { width: 35%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 기사 DB 분석 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
+  <div class="row">
+    <select id="preset" title="분석할 기간 (DB의 '날짜' 열 기준)">
+      <option value="all">전체 기간</option>
+      <option value="this-year" selected>올해</option>
+      <option value="last-year">작년</option>
+      <option value="this-month">이번 달</option>
+      <option value="12m">최근 12개월</option>
+      <option value="range">날짜 지정</option>
+    </select>
+    <input type="date" id="date-from"> ~ <input type="date" id="date-to">
+    <button id="btn-refresh" title="DB를 다시 읽어 분석">새로 고침</button>
+  </div>
+  <span class="muted" id="period-info"></span>
+</header>
+
+<main>
+  <div id="error"></div>
+  <section class="cards" id="cards"></section>
+
+  <section class="panel">
+    <h2>년도별 <small>DB 행 수 기준</small><span class="legend" data-legend></span></h2>
+    <div id="by-year"></div>
+  </section>
+
+  <section class="panel">
+    <h2>월별<span class="legend" data-legend></span></h2>
+    <div id="by-month" class="scroll"></div>
+  </section>
+
+  <div class="two">
+    <section class="panel">
+      <h2>분류별<span class="legend" data-legend></span></h2>
+      <div id="by-category" class="scroll"></div>
+    </section>
+    <section class="panel">
+      <h2>언론사별 <small id="press-count"></small><span class="legend" data-legend></span></h2>
+      <div id="by-press" class="scroll"></div>
+    </section>
+  </div>
+
+  <p class="muted" style="font-size:12px; margin:0">건수는 DB 행 수 기준입니다. 같은 기사가 온라인과 지면(또는 방송)으로 모두 있으면 각각 1건으로 셉니다. 기간은 DB의 '날짜' 열 기준입니다.</p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const KINDS = [["online", "온라인"], ["print", "지면"], ["broadcast", "방송"]];
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+const fmt = (n) => Number(n).toLocaleString("ko-KR");
+const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+async function api(path) {
+  const res = await fetch(path);
+  if (res.status === 401) { location.href = "/login"; throw new Error("로그인이 필요합니다."); }
+  if (!res.ok) throw new Error(await res.json().then(j => j.detail).catch(() => res.statusText));
+  return res.json();
+}
+
+// 미리 정한 기간 → 날짜 칸
+function applyPreset() {
+  const p = $("preset").value;
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const set = (from, to) => { $("date-from").value = from; $("date-to").value = to; };
+  if (p === "all") set("", "");
+  else if (p === "this-year") set(`${y}-01-01`, `${y}-12-31`);
+  else if (p === "last-year") set(`${y - 1}-01-01`, `${y - 1}-12-31`);
+  else if (p === "this-month") set(iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)));
+  else if (p === "12m") set(iso(new Date(y, m - 11, 1)), iso(new Date(y, m + 1, 0)));
+}
+
+function bar(item, max) {
+  if (!max) return `<div class="bar"></div>`;
+  return `<div class="bar" title="온라인 ${item.online} · 지면 ${item.print} · 방송 ${item.broadcast}">` +
+    KINDS.map(([k]) => item[k] ? `<span class="${k}" style="width:${item[k] / max * 100}%"></span>` : "").join("") + `</div>`;
+}
+
+function table(items, label, emptyText) {
+  if (!items.length) return `<div class="empty">${emptyText}</div>`;
+  const max = Math.max(...items.map(x => x.total));
+  return `<table><thead><tr><th>${label}</th><th>총</th><th>온라인</th><th>지면</th><th>방송</th><th></th></tr></thead><tbody>` +
+    items.map(x => `<tr class="${x.total ? "" : "zero"}"><td>${esc(x.label ?? x.key)}</td><td><b>${fmt(x.total)}</b></td>
+      <td>${fmt(x.online)}</td><td>${fmt(x.print)}</td><td>${fmt(x.broadcast)}</td><td class="bar-cell">${bar(x, max)}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+// 기간 안의 모든 달을 0건 포함해 채운다 (빈 달도 보이게)
+function fillMonths(list, from, to) {
+  if (!from || !to) return list;
+  const have = new Map(list.map(x => [x.key, x]));
+  const out = [];
+  let [y, m] = from.slice(0, 7).split("-").map(Number);
+  const end = to.slice(0, 7);
+  for (let guard = 0; guard < 600; guard++) {
+    const key = `${y}-${String(m).padStart(2, "0")}`;
+    if (key > end) break;
+    out.push(have.get(key) || { key, total: 0, online: 0, print: 0, broadcast: 0 });
+    if (++m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+async function load() {
+  const q = new URLSearchParams();
+  if ($("date-from").value) q.set("date_from", $("date-from").value);
+  if ($("date-to").value) q.set("date_to", $("date-to").value);
+  try {
+    const s = await api(`/api/archive/stats?${q}`);
+    $("error").innerHTML = "";
+    const t = s.totals;
+    const pct = (n) => t.total ? `${Math.round(n / t.total * 1000) / 10}%` : "";
+    $("cards").innerHTML = `<div class="card"><div class="label">총 기사</div><div class="num">${fmt(t.total)}<small>건</small></div><div class="pct">&nbsp;</div></div>` +
+      KINDS.map(([k, label]) => `<div class="card"><div class="label"><span class="dot ${k}"></span>${label}</div>
+        <div class="num">${fmt(t[k])}<small>건</small></div><div class="pct">${pct(t[k])}</div></div>`).join("");
+    const p = s.period;
+    $("period-info").textContent = t.total
+      ? `${p.first_date} ~ ${p.last_date}의 기사` : "이 기간에는 기사가 없습니다.";
+
+    $("by-year").innerHTML = table(s.by_year.map(x => ({ ...x, label: `${x.key}년` })), "년도", "기사가 없습니다.");
+    const from = $("date-from").value || p.first_date, to = $("date-to").value || p.last_date;
+    const months = fillMonths(s.by_month, from, to).map(x => ({ ...x, label: `${x.key.slice(0, 4)}년 ${Number(x.key.slice(5))}월` }));
+    $("by-month").innerHTML = table(months, "월", "기사가 없습니다.");
+    $("by-category").innerHTML = table(s.by_category, "분류", "기사가 없습니다.");
+    $("by-press").innerHTML = table(s.by_press, "언론사", "기사가 없습니다.");
+    $("press-count").textContent = s.by_press.length ? `${s.by_press.length}곳` : "";
+  } catch (err) {
+    $("error").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+  }
+}
+
+document.querySelectorAll("[data-legend]").forEach(el => {
+  el.innerHTML = KINDS.map(([k, label]) => `<span><span class="dot ${k}"></span>${label}</span>`).join("");
+});
+$("preset").addEventListener("change", () => { applyPreset(); load(); });
+for (const id of ["date-from", "date-to"]) $(id).addEventListener("change", () => { $("preset").value = "range"; load(); });
+$("btn-refresh").addEventListener("click", load);
+
+applyPreset();
+load();
+// 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
+function keepAlive(info) { if (info && info.window_mode && window.EventSource) new EventSource("/api/alive"); }
+api("/api/status").then(info => { keepAlive(info); $("version").textContent = `v${info.version}`; }).catch(() => {});
+</script>
+</body>
+</html>

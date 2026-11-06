@@ -4,8 +4,10 @@ GoodMorningKOITA 웹 서버
 실행: python app.py  →  브라우저에서 http://127.0.0.1:8000
 """
 
+import asyncio
 import os
 import threading
+import time
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,7 +15,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
@@ -25,6 +27,7 @@ import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
 import exporter  # noqa: E402
 import printcheck  # noqa: E402
+import stats  # noqa: E402
 
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
 MIN_COLLECT_INTERVAL = timedelta(minutes=10)
@@ -86,6 +89,18 @@ def icon(name: str):
 def index():
     # 파일을 바꿨을 때 브라우저가 예전 화면을 캐시해서 보여주지 않도록
     return FileResponse(BASE_DIR / "static" / "index.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/analysis")
+def analysis():
+    """기사 DB 분석 화면 (기간별 구분·년도·월·분류·언론사 건수)"""
+    return FileResponse(BASE_DIR / "static" / "analysis.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/archive/stats")
+def archive_stats(date_from: str | None = None, date_to: str | None = None):
+    """기사 DB 분석 결과 JSON (DB 행 수 기준). date_from·date_to: YYYY-MM-DD, 비우면 전체"""
+    return stats.summarize(archive.all_rows(), date_from or None, date_to or None)
 
 
 @app.get("/editor")
@@ -176,7 +191,54 @@ def run_collect(
 @app.get("/api/status")
 def status():
     return {"last_run": db.last_run(), "version": VERSION, "archive": archive.info(),
-            "categories": archive.CATEGORIES}
+            "categories": archive.CATEGORIES, "window_mode": WINDOW_MODE}
+
+
+# ---------------- 창 모드: 프로그램 창이 모두 닫히면 서버도 끝낸다 ----------------
+
+WINDOW_MODE = False         # launcher.py(GoodMorningKOITA.vbs)로 켰을 때 True
+WINDOW_GRACE_SECONDS = 20   # 마지막 창이 닫힌 뒤 이만큼 기다렸다 끈다 (새로고침·창 이동 중 끊김 대비)
+FIRST_WINDOW_SECONDS = 180  # 켠 뒤 창이 한 번도 안 붙으면 이만큼 뒤에 끈다
+open_windows = 0
+open_windows_lock = threading.Lock()
+
+
+@app.get("/api/alive")
+async def alive(request: Request):
+    """창 모드에서 각 화면이 열려 있는 동안 붙잡고 있는 연결 (EventSource). 연결 수 = 열린 프로그램 창 수"""
+    async def stream():
+        global open_windows
+        with open_windows_lock:
+            open_windows += 1
+        try:
+            yield "retry: 2000\n\n"
+            while not await request.is_disconnected():
+                await asyncio.sleep(5)
+                yield ": ping\n\n"
+        finally:
+            with open_windows_lock:
+                open_windows -= 1
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
+def watch_windows(server):
+    """열린 프로그램 창이 0개로 WINDOW_GRACE_SECONDS 넘게 있으면 서버를 끝낸다 (검색·DB 저장 중이면 끝날 때까지 기다림)"""
+    started = time.monotonic()
+    seen = False
+    empty_since = None
+    while not server.should_exit:
+        time.sleep(2)
+        now = time.monotonic()
+        if open_windows > 0:
+            seen, empty_since = True, None
+            continue
+        if empty_since is None:
+            empty_since = now
+        waited = now - empty_since if seen else now - started
+        if waited >= (WINDOW_GRACE_SECONDS if seen else FIRST_WINDOW_SECONDS) \
+                and not collect_lock.locked() and not archive_lock.locked():
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 프로그램 창이 모두 닫혀 종료합니다.", flush=True)
+            server.should_exit = True
 
 
 # ---------------- 기사 ----------------
@@ -416,13 +478,29 @@ def xlsx_response(articles):
     )
 
 
-if __name__ == "__main__":
+def serve(window_mode=False):
+    """
+    서버 실행. window_mode=True(launcher.py): 프로그램 창(엣지 앱 창)을 열고, 창이 모두 닫히면 끝난다.
+    False(run.bat·클라우드): 예전처럼 CMD 창에서 돈다
+    """
+    global WINDOW_MODE
     import uvicorn
 
     # .env의 HOST·PORT로 바꿀 수 있다. 클라우드 서버에서는 HOST=0.0.0.0
     host = os.getenv("HOST", "").strip() or "127.0.0.1"
     port = int(os.getenv("PORT", "").strip() or 8000)
+    url = f"http://127.0.0.1:{port}"
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*"))
+    WINDOW_MODE = window_mode
+    if window_mode:
+        import window
+        threading.Thread(target=watch_windows, args=(server,), daemon=True).start()
+        threading.Timer(1.5, window.open_window, [url]).start()
     # 내 PC에서 켤 때만 브라우저를 자동으로 연다 (OPEN_BROWSER=0이면 안 연다)
-    if os.getenv("OPEN_BROWSER", "").strip() != "0" and host in ("127.0.0.1", "localhost"):
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*")
+    elif os.getenv("OPEN_BROWSER", "").strip() != "0" and host in ("127.0.0.1", "localhost"):
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    server.run()
+
+
+if __name__ == "__main__":
+    serve()
