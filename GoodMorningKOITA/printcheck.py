@@ -180,6 +180,15 @@ def list_files(folder):
     )
 
 
+def file_path(folder, name):
+    """폴더 안의 지면 기사 파일 경로 (list_files가 준 상대 경로). 폴더 밖이나 지면 파일이 아니면 FileNotFoundError"""
+    root = Path(folder).expanduser().resolve()
+    path = (root / name).resolve()
+    if root not in path.parents or path.suffix.lower() not in FILE_EXTENSIONS or not path.is_file():
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {name}")
+    return path
+
+
 def title_score(a, b):
     a, b = norm(a), norm(b)
     if not a or not b:

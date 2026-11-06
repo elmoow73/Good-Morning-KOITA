@@ -456,8 +456,7 @@ async function collect(force) {
   await loadArticles();
   // 실제로 검색을 했을 때만 완료 팝업 (10분 안에 다시 열어 검색을 건너뛴 경우는 띄우지 않음)
   if (result && !result.skipped) {
-    let message = `검색이 완료되었습니다.\n새 기사 ${result.new_count}건`;
-    if (result.errors && result.errors.length) message += `\n\n오류 ${result.errors.length}건이 있습니다. 기사 목록 위 빨간 칸을 확인하세요.`;
+    const message = `검색이 완료되었습니다.\n새 기사 ${result.new_count}건`;
     setTimeout(() => alert(message), 50);  // 목록을 먼저 화면에 그린 뒤 띄운다
   } else if (result && result.busy) {
     alert("다른 검색이 아직 진행 중입니다. 끝난 뒤 다시 눌러 주세요.");

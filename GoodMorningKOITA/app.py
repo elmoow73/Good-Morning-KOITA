@@ -329,6 +329,18 @@ def print_check(body: PrintCheck):
     return printcheck.compare(names, rows, printcheck.load_links()) | {"source": source}
 
 
+@app.get("/api/print-check/file")
+def print_check_file(name: str, folder: str | None = None):
+    """지면 확인 결과에서 파일명을 누르면 그 지면 기사 파일(JPG 등)을 브라우저 새 탭에 연다"""
+    folder = (folder or "").strip() or printcheck.default_folder()
+    try:
+        path = printcheck.file_path(folder, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    # inline: 내려받지 않고 브라우저에서 바로 보여 준다
+    return FileResponse(path, headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(path.name)}"})
+
+
 class PrintLink(BaseModel):
     file: str
     press: str | None = None  # 비우면 연결 끊기

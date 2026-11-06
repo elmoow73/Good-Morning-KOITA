@@ -582,10 +582,30 @@ $("btn-run-check").addEventListener("click", () => {
 });
 $("btn-pick").addEventListener("click", () => $("picker").click());
 $("picker").addEventListener("change", (e) => {
-  const names = [...e.target.files].map(f => f.webkitRelativePath || f.name);
+  const files = [...e.target.files];
+  const names = files.map(f => f.webkitRelativePath || f.name);
+  // 직접 고른 폴더는 서버가 못 읽으므로, 파일명을 누르면 브라우저가 가진 파일을 바로 연다
+  for (const url of pickedFiles.values()) URL.revokeObjectURL(url);
+  pickedFiles = new Map(files.map((f, i) => [names[i], f]));
   e.target.value = "";
   if (names.length) runCheck({ names });
 });
+
+let pickedFiles = new Map();  // '폴더 직접 고르기'로 고른 파일 (파일명 → File)
+
+// 지면 기사 파일 열기 (새 탭)
+function openPrintFile(name) {
+  if (lastSource && lastSource.names) {
+    const file = pickedFiles.get(name);
+    if (!file) { alert("파일을 찾을 수 없습니다. 폴더를 다시 골라 주세요."); return; }
+    const url = URL.createObjectURL(file);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
+  const q = new URLSearchParams({ name, folder: (lastSource && lastSource.folder) || "" });
+  window.open(`/api/print-check/file?${q}`, "_blank");
+}
 
 let lastSource = null;   // 마지막으로 비교한 폴더(또는 파일명 목록). 연결·등록 뒤 다시 비교할 때 씀
 let linkOpen = null;     // 연결할 DB 행을 고르는 중인 파일 (checkResult.files 번호)
@@ -663,7 +683,7 @@ function renderCheck() {
       return `<tr>
         <td>${canFix ? `<label title="표에 반영할 항목"><input type="checkbox" data-fix="${idx}" ${f.picked !== false ? "checked" : ""}></label>` : ""}</td>
         <td><span class="badge ${f.status}">${STATUS[f.status]}</span></td>
-        <td style="max-width:360px; overflow-wrap:anywhere">${esc(f.file)}</td>
+        <td style="max-width:360px; overflow-wrap:anywhere"><span class="link" data-open-file="${idx}" title="눌러서 파일 열기 (새 탭)">${esc(f.file)}</span></td>
         <td>${probs || `<span class="note">날짜 ${esc(f.date || "")} · 지면 ${esc(f.page_text || "")}</span>`}${notes}</td>
         <td>${row}</td></tr>` + (linkOpen === idx ? pickerHtml(f, idx) : "");
     }).join("") + `</tbody></table>` : `<div class="muted">확인이 필요한 파일이 없습니다. 모두 일치합니다.</div>`;
@@ -755,6 +775,7 @@ async function linkTo(f, target) {
 
 $("check-result").addEventListener("click", async (e) => {
   const t = e.target;
+  if (t.dataset.openFile !== undefined) { openPrintFile(checkResult.files[Number(t.dataset.openFile)].file); return; }
   try {
     if (t.dataset.openLink !== undefined) {
       linkOpen = Number(t.dataset.openLink);
