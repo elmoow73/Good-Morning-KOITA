@@ -108,7 +108,7 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 .venv\Scripts\python cli.py archive-rows                # 기사 DB 전체 행
 ```
 
-웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows`(행과 `revision`), `PUT /api/archive/rows`(`{"revision", "rows"}`로 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림).
+웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows`(행과 `revision`), `PUT /api/archive/rows`(`{"revision", "rows"}`로 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김).
 
 ## 기사 DB (다른 프로그램에서 읽기)
 

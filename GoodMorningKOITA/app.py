@@ -341,6 +341,24 @@ def print_check_file(name: str, folder: str | None = None):
     return FileResponse(path, headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(path.name)}"})
 
 
+class PrintTrash(BaseModel):
+    name: str                  # 지면 확인 결과의 파일 (폴더 안 상대 경로)
+    folder: str | None = None  # 비우면 .env NEWSPAPER_DIR
+
+
+@app.post("/api/print-check/trash")
+def print_check_trash(body: PrintTrash):
+    """실수로 저장한 지면 기사 파일을 폴더 안 '_삭제한 파일' 폴더로 옮긴다 (완전히 지우지 않음, 다음 비교부터 빠짐)"""
+    folder = (body.folder or "").strip() or printcheck.default_folder()
+    if not folder:
+        raise HTTPException(400, "지면 기사 폴더가 없습니다.")
+    try:
+        moved = printcheck.trash_file(folder, body.name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return {"ok": True, "moved_to": str(moved)}
+
+
 class PrintLink(BaseModel):
     file: str
     press: str | None = None  # 비우면 연결 끊기

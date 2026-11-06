@@ -82,6 +82,8 @@
   .reason { color: #c2410c; font-size: 12px; }
   .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
   .acts button { padding: 2px 8px; font-size: 12px; }
+  .acts button.danger { color: var(--red); }
+  .acts button.danger:hover { border-color: var(--red); }
   tr.picker > td { background: #f8fafc; }
   .cands { max-height: 260px; overflow: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
   .cand { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; border-bottom: 1px solid var(--line); }
@@ -613,6 +615,7 @@ let linkOpen = null;     // 연결할 DB 행을 고르는 중인 파일 (checkRe
 async function runCheck(source, keepTab = false) {
   lastSource = source;
   linkOpen = null;
+  findOpen = null;
   if (!keepTab) {
     $("check-summary").innerHTML = `<div class="muted">비교하는 중…</div>`;
     $("check-result").innerHTML = "";
@@ -659,10 +662,12 @@ function renderCheck() {
 
   if (checkTab === "missing") {
     $("check-result").innerHTML = checkResult.missing.length ? `<table class="result">
-      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th></tr></thead><tbody>` +
+      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th><th>파일</th></tr></thead><tbody>` +
       checkResult.missing.map(m => `<tr>
         <td><span class="link" data-goto="${m.seq}" data-field="date">${esc(seqOf(m.seq))}</span></td>
-        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td></tr>`).join("") +
+        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td>
+        <td><div class="acts"><button data-find-file="${m.seq}" title="같은 매체이거나 날짜가 가까운 지면 파일을 후보로 보여 줍니다">파일 찾기</button></div></td></tr>` +
+        (findOpen === m.seq ? filePickerHtml(m) : "")).join("") +
       `</tbody></table><div class="note">파일 날짜 범위(앞뒤 3일) 안에 있는데 짝이 되는 파일이 없는 DB 지면 행입니다.</div>`
       : `<div class="muted">없습니다.</div>`;
     return;
@@ -708,6 +713,9 @@ function actionsHtml(f, idx) {
   if (f.row && (f.status === "suspect" || f.linked) && normText(f.row.title) !== normText(f.title)) {
     out.push(`<button data-retitle="${idx}" title="연결된 DB 지면 행의 제목을 파일(지면 기사)의 제목으로 바꿉니다">DB 제목을 지면 제목으로</button>`);
   }
+  if (f.status === "no_match" && lastSource && lastSource.folder) {
+    out.push(`<button data-trash="${idx}" class="danger" title="파일명을 눌러 확인한 뒤, 실수로 저장한 파일이면 폴더 안 '_삭제한 파일' 폴더로 옮깁니다 (다시 꺼낼 수 있음)">지면 파일 삭제</button>`);
+  }
   if (f.linked) out.push(`<button data-unlink="${idx}" title="직접 연결한 것을 끊고 다시 자동으로 찾습니다">연결 끊기</button>`);
   return out.length ? `<div class="acts">${out.join("")}</div>` : "";
 }
@@ -741,6 +749,40 @@ function candsHtml(f, term) {
       <span class="t">${esc(r.cur.title)} <span class="note">${r.isNew ? "새 행" : "연번 " + r.seq}</span></span>
       <button data-link-row="${r._id}">이 기사로 연결</button></div>`).join("") ||
     `<div class="cand muted">${term ? "찾는 기사가 없습니다." : "같은 매체의 기사가 없습니다. 위 칸에서 제목으로 찾아보세요."}</div>`;
+}
+
+// ---------------- 파일 없는 DB 지면 행 → 파일 찾기 ----------------
+
+let findOpen = null;  // 파일을 찾는 중인 DB 지면 행 (표의 행 번호)
+
+function fileCandidates(m, term) {
+  const t = normText(term);
+  return checkResult.files
+    .map(f => ({ f, idx: checkResult.files.indexOf(f), gap: dayDiff(m.date, f.date), same: sameName(m.press, f.press) }))
+    .filter(x => t ? normText(x.f.file).includes(t) : (x.same || x.gap <= 3))
+    // 같은 매체 먼저, 그다음 날짜 가까운 순
+    .sort((a, b) => (b.same - a.same) || a.gap - b.gap)
+    .slice(0, 40);
+}
+
+function fileCandsHtml(m, term) {
+  return fileCandidates(m, term).map(({ f, idx, gap }) => `<div class="cand">
+      <span class="badge ${f.status}">${STATUS[f.status]}</span>
+      <span class="note">${esc(f.date || "날짜?")}${gap < 999 ? ` (${gap ? gap + "일 차이" : "같은 날"})` : ""}</span>
+      <span class="t"><span class="link" data-open-file="${idx}" title="눌러서 파일 열기 (새 탭)">${esc(f.file)}</span>
+        ${f.row ? `<span class="note">지금 짝: ${esc(seqOf(f.row.seq) === "새 행" ? "새 행" : "연번 " + seqOf(f.row.seq))}</span>` : ""}</span>
+      <button data-link-file="${idx}">이 파일과 연결</button></div>`).join("") ||
+    `<div class="cand muted">${term ? "찾는 파일이 없습니다." : "같은 매체이거나 날짜가 가까운(앞뒤 3일) 파일이 없습니다. 위 칸에서 파일명으로 찾아보세요."}</div>`;
+}
+
+function filePickerHtml(m) {
+  return `<tr class="picker"><td colspan="6">
+    <div class="row"><b>이 DB 행의 지면 파일 찾기</b>
+      <input type="text" id="file-search" placeholder="파일명으로 찾기 (비우면 같은 매체·날짜 앞뒤 3일 파일)" style="flex:1; min-width:240px">
+      <button data-close-find>닫기</button></div>
+    <div class="note">파일명을 누르면 새 탭에서 열어 볼 수 있습니다. 맞는 파일이면 "이 파일과 연결"을 누르세요. 연결은 기억해 두어 다음 확인 때도 이 행과 비교합니다.</div>
+    <div class="cands" id="file-cands">${fileCandsHtml(m, "")}</div>
+  </td></tr>`;
 }
 
 function newPrintRow(values) {
@@ -777,6 +819,33 @@ $("check-result").addEventListener("click", async (e) => {
   const t = e.target;
   if (t.dataset.openFile !== undefined) { openPrintFile(checkResult.files[Number(t.dataset.openFile)].file); return; }
   try {
+    if (t.dataset.findFile !== undefined) {
+      findOpen = Number(t.dataset.findFile);
+      renderCheck();
+      $("file-search")?.focus();
+      return;
+    } else if (t.dataset.closeFind !== undefined) {
+      findOpen = null;
+      renderCheck();
+      return;
+    } else if (t.dataset.linkFile !== undefined) {
+      const f = checkResult.files[Number(t.dataset.linkFile)];
+      const r = rows.find(x => x._id === findOpen);
+      if (!r) return;
+      if (f.row && !confirm(`이 파일은 지금 ${seqOf(f.row.seq) === "새 행" ? "새 행" : "연번 " + seqOf(f.row.seq)}과 짝지어져 있습니다. 이 행으로 바꿔 연결할까요?`)) return;
+      await api("/api/print-check/link", { method: "POST", body: { file: f.file, press: r.cur.press, title: r.cur.title } });
+      findOpen = null;
+      message("ok", `파일을 ${r.isNew ? "새 행" : "연번 " + r.seq}과 연결했습니다. 다시 비교한 결과를 확인하세요.`);
+      await runCheck(lastSource, true);
+      return;
+    } else if (t.dataset.trash !== undefined) {
+      const f = checkResult.files[Number(t.dataset.trash)];
+      if (!confirm(`이 지면 파일을 삭제할까요?\n\n${f.file}\n\n완전히 지우지 않고 폴더 안 '_삭제한 파일' 폴더로 옮깁니다. 잘못 지웠으면 거기서 다시 꺼내면 됩니다.`)) return;
+      const res = await api("/api/print-check/trash", { method: "POST", body: { name: f.file, folder: lastSource.folder } });
+      message("ok", `파일을 옮겼습니다: ${esc(res.moved_to)}`);
+      await runCheck(lastSource, true);
+      return;
+    }
     if (t.dataset.openLink !== undefined) {
       linkOpen = Number(t.dataset.openLink);
       renderCheck();
@@ -813,6 +882,11 @@ $("check-result").addEventListener("click", async (e) => {
 });
 
 $("check-result").addEventListener("input", (e) => {
+  if (e.target.id === "file-search" && findOpen !== null) {
+    const m = checkResult.missing.find(x => x.seq === findOpen);
+    if (m) $("file-cands").innerHTML = fileCandsHtml(m, e.target.value);
+    return;
+  }
   if (e.target.id === "link-search" && linkOpen !== null) {
     $("link-cands").innerHTML = candsHtml(checkResult.files[linkOpen], e.target.value);
   }
