@@ -11,12 +11,15 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).parent)
 DB_PATH = DATA_DIR / "news.db"
 
 # 기본 키워드. 하나라도 들어간 기사를 모두 모은다(OR). 따옴표는 정확히 일치하는 기사 위주로 검색
-DEFAULT_KEYWORDS = ['"한국산업기술진흥협회"', '"산업기술진흥협회"', '"산기협"', '"장영실상"', '"엔지니어상"']
+DEFAULT_KEYWORDS = ['"산업기술진흥협회"', '"산기협"', '"장영실상"', '"엔지니어상"', '"기술개발인"', '"구자균"']
+# v1.4.0에서 기본 키워드를 바꾼 내용 (이미 쓰던 news.db에도 한 번 반영). "산업기술진흥협회"가 "한국산업기술진흥협회"도 찾으므로 뺌
+V14_REMOVED_KEYWORDS = ['"한국산업기술진흥협회"']
+V14_ADDED_KEYWORDS = ['"기술개발인"', '"구자균"']
 # v1.0.0의 기본 키워드. 업그레이드할 때 새 기본 키워드로 바꾼다
 OLD_DEFAULT_KEYWORDS = ["한국산업기술진흥협회", "산기협"]
 
 # PRAGMA user_version으로 기록하는 DB 구조 버전
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS keywords (
@@ -98,6 +101,14 @@ def init_db():
             columns = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
             if "category" not in columns:
                 conn.execute("ALTER TABLE articles ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+            conn.execute("PRAGMA user_version = 3")
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 4:
+            # v1.4.0: 기본 키워드 변경 ("한국산업기술진흥협회" 빼고 "기술개발인", "구자균" 추가). 직접 추가한 키워드는 그대로
+            conn.executemany("DELETE FROM keywords WHERE keyword = ?", [(k,) for k in V14_REMOVED_KEYWORDS])
+            conn.executemany(
+                "INSERT OR IGNORE INTO keywords (keyword, created_at) VALUES (?, ?)",
+                [(k, now_iso()) for k in V14_ADDED_KEYWORDS],
+            )
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
