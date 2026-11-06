@@ -71,6 +71,12 @@
   a.button { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px;
              color: var(--text); text-decoration: none; background: var(--panel); }
   a.button:hover { border-color: var(--accent); }
+  /* 상단바와 기사 표 제목 줄은 스크롤해도 위에 붙어 있게 (폰처럼 좁은 화면은 제외) */
+  @media (min-width: 721px) {
+    header { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    #articles-wrap thead th { position: sticky; top: var(--header-h, 0px); z-index: 5; background: var(--panel);
+                              box-shadow: inset 0 -1px 0 var(--line); }
+  }
   @media (max-width: 720px) {
     main, header { padding: 12px 16px; }
     .hide-sm { display: none; }
@@ -359,6 +365,24 @@ $("articles").addEventListener("change", async (e) => {
   renderArticles();
 });
 
+// Shift 다중 체크: 마지막으로 누른 칸부터 Shift+클릭한 칸까지 화면에 보이는 순서대로 같은 상태로 바꾼다
+let lastCheckId = null;
+$("articles").addEventListener("click", (e) => {
+  const id = Number(e.target.dataset?.check);
+  if (!id) return;
+  if (e.shiftKey && lastCheckId !== null) {
+    const ids = visibleArticles().map(a => a.id);
+    const from = ids.indexOf(lastCheckId), to = ids.indexOf(id);
+    if (from !== -1 && to !== -1) {
+      for (const x of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+        e.target.checked ? checked.add(x) : checked.delete(x);
+      }
+      window.getSelection()?.removeAllRanges();  // Shift+클릭으로 글자가 잡히는 것 막기
+    }
+  }
+  lastCheckId = id;  // 이어지는 change 이벤트가 이 칸을 반영하고 다시 그린다
+});
+
 $("check-all").addEventListener("change", (e) => {
   for (const a of visibleArticles()) e.target.checked ? checked.add(a.id) : checked.delete(a.id);
   renderArticles();
@@ -412,13 +436,14 @@ async function loadArticles() {
 
 async function collect(force) {
   const btn = $("btn-collect");
+  let result = null;
   btn.disabled = true;
   $("status").textContent = "네이버 뉴스 검색 중…";
   try {
     if ($("search-period").value === "range" && !$("search-from").value && !$("search-to").value) {
       throw new Error("검색할 날짜를 지정하세요.");
     }
-    const result = await api(`/api/collect?force=${force}&${periodQuery("search")}`, { method: "POST" });
+    result = await api(`/api/collect?force=${force}&${periodQuery("search")}`, { method: "POST" });
     syncListPeriod();
     showStatus(result.last_run);
     showErrors(result.errors);
@@ -429,7 +454,20 @@ async function collect(force) {
     btn.disabled = false;
   }
   await loadArticles();
+  // 실제로 검색을 했을 때만 완료 팝업 (10분 안에 다시 열어 검색을 건너뛴 경우는 띄우지 않음)
+  if (result && !result.skipped) {
+    let message = `검색이 완료되었습니다.\n새 기사 ${result.new_count}건`;
+    if (result.errors && result.errors.length) message += `\n\n오류 ${result.errors.length}건이 있습니다. 기사 목록 위 빨간 칸을 확인하세요.`;
+    setTimeout(() => alert(message), 50);  // 목록을 먼저 화면에 그린 뒤 띄운다
+  } else if (result && result.busy) {
+    alert("다른 검색이 아직 진행 중입니다. 끝난 뒤 다시 눌러 주세요.");
+  }
 }
+
+// 상단바 높이만큼 기사 표 제목 줄을 아래에 붙인다 (창 폭에 따라 상단바 줄 수가 바뀜)
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--header-h", `${document.querySelector("header").offsetHeight}px`);
+}).observe(document.querySelector("header"));
 
 $("btn-collect").addEventListener("click", () => collect(true));
 function checkedIds() {

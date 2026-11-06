@@ -343,6 +343,30 @@ $("body").addEventListener("change", (e) => {
   e.target.closest("tr").classList.toggle("picked", r.picked);
 });
 
+// Shift 다중 체크: 마지막으로 누른 칸부터 Shift+클릭한 칸까지 화면에 보이는 순서대로 같은 상태로 바꾼다
+let lastPickId = null;
+$("body").addEventListener("click", (e) => {
+  if (e.target.dataset?.pick === undefined) return;
+  const id = rowOf(e.target)._id;
+  if (e.shiftKey && lastPickId !== null) {
+    const trs = [...$("body").querySelectorAll("tr[data-id]")];
+    const from = trs.findIndex(tr => Number(tr.dataset.id) === lastPickId);
+    const to = trs.findIndex(tr => Number(tr.dataset.id) === id);
+    if (from !== -1 && to !== -1) {
+      const on = e.target.checked;
+      for (const tr of trs.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+        const r = rowOf(tr);
+        r.picked = on;
+        tr.classList.toggle("picked", on);
+        const box = tr.querySelector("input[data-pick]");
+        if (box) box.checked = on;
+      }
+      window.getSelection()?.removeAllRanges();
+    }
+  }
+  lastPickId = id;
+});
+
 $("head").addEventListener("click", (e) => {
   if (e.target.id === "pick-all") {
     const on = e.target.checked;
