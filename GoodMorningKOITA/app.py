@@ -480,7 +480,7 @@ def xlsx_response(articles):
 
 def serve(window_mode=False):
     """
-    서버 실행. window_mode=True(launcher.py): 프로그램 창(엣지 앱 창)을 열고, 창이 모두 닫히면 끝난다.
+    서버 실행. window_mode=True(launcher.py): 크롬에 프로그램 화면(탭)을 열고, 그 탭이 모두 닫히면 끝난다.
     False(run.bat·클라우드): 예전처럼 CMD 창에서 돈다
     """
     global WINDOW_MODE

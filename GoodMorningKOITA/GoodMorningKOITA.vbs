@@ -1,7 +1,7 @@
 ' GoodMorningKOITA: run without a CMD window (double-click this file).
 ' First run: shows the setup window (run.bat --setup) once to install libraries.
-' Then starts the server hidden (pythonw launcher.py) and opens the program window.
-' Closing all program windows stops the program. For a CMD window (debugging) use run.bat.
+' Then starts the server hidden (pythonw launcher.py) and opens the program in Chrome (a normal tab).
+' Closing all program tabs stops the program. For a CMD window (debugging) use run.bat.
 Option Explicit
 Dim sh, fso, dir, rc
 Set sh = CreateObject("WScript.Shell")
