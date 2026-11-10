@@ -10,3 +10,5 @@ database/
 GoodMorningKOITA/deploy/data/
 GoodMorningKOITA/deploy/.deploy.env
 GoodMorningKOITA/deploy/backup.log
+goodmorning.log
+goodmorning.log.old

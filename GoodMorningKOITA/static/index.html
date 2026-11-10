@@ -71,6 +71,12 @@
   a.button { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px;
              color: var(--text); text-decoration: none; background: var(--panel); }
   a.button:hover { border-color: var(--accent); }
+  /* 상단바와 기사 표 제목 줄은 스크롤해도 위에 붙어 있게 (폰처럼 좁은 화면은 제외) */
+  @media (min-width: 721px) {
+    header { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    #articles-wrap thead th { position: sticky; top: var(--header-h, 0px); z-index: 5; background: var(--panel);
+                              box-shadow: inset 0 -1px 0 var(--line); }
+  }
   @media (max-width: 720px) {
     main, header { padding: 12px 16px; }
     .hide-sm { display: none; }
@@ -101,6 +107,7 @@
       <option value="" disabled selected>체크한 기사 분류</option>
     </select>
     <a class="button" href="/editor" target="_blank" title="기사 DB를 엑셀처럼 직접 고치는 창 (지면보도 날짜 확인 포함)">DB 편집</a>
+    <a class="button" href="/analysis" target="_blank" title="그간 쌓은 기사 DB를 기간별로 분석하는 창 (구분·년도·월·분류·언론사별 건수)">DB 분석</a>
     <span class="kw" id="archive-info"></span>
   </div>
 </header>
@@ -359,6 +366,24 @@ $("articles").addEventListener("change", async (e) => {
   renderArticles();
 });
 
+// Shift 다중 체크: 마지막으로 누른 칸부터 Shift+클릭한 칸까지 화면에 보이는 순서대로 같은 상태로 바꾼다
+let lastCheckId = null;
+$("articles").addEventListener("click", (e) => {
+  const id = Number(e.target.dataset?.check);
+  if (!id) return;
+  if (e.shiftKey && lastCheckId !== null) {
+    const ids = visibleArticles().map(a => a.id);
+    const from = ids.indexOf(lastCheckId), to = ids.indexOf(id);
+    if (from !== -1 && to !== -1) {
+      for (const x of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+        e.target.checked ? checked.add(x) : checked.delete(x);
+      }
+      window.getSelection()?.removeAllRanges();  // Shift+클릭으로 글자가 잡히는 것 막기
+    }
+  }
+  lastCheckId = id;  // 이어지는 change 이벤트가 이 칸을 반영하고 다시 그린다
+});
+
 $("check-all").addEventListener("change", (e) => {
   for (const a of visibleArticles()) e.target.checked ? checked.add(a.id) : checked.delete(a.id);
   renderArticles();
@@ -412,13 +437,14 @@ async function loadArticles() {
 
 async function collect(force) {
   const btn = $("btn-collect");
+  let result = null;
   btn.disabled = true;
   $("status").textContent = "네이버 뉴스 검색 중…";
   try {
     if ($("search-period").value === "range" && !$("search-from").value && !$("search-to").value) {
       throw new Error("검색할 날짜를 지정하세요.");
     }
-    const result = await api(`/api/collect?force=${force}&${periodQuery("search")}`, { method: "POST" });
+    result = await api(`/api/collect?force=${force}&${periodQuery("search")}`, { method: "POST" });
     syncListPeriod();
     showStatus(result.last_run);
     showErrors(result.errors);
@@ -429,7 +455,19 @@ async function collect(force) {
     btn.disabled = false;
   }
   await loadArticles();
+  // 실제로 검색을 했을 때만 완료 팝업 (10분 안에 다시 열어 검색을 건너뛴 경우는 띄우지 않음)
+  if (result && !result.skipped) {
+    const message = `검색이 완료되었습니다.\n새 기사 ${result.new_count}건`;
+    setTimeout(() => alert(message), 50);  // 목록을 먼저 화면에 그린 뒤 띄운다
+  } else if (result && result.busy) {
+    alert("다른 검색이 아직 진행 중입니다. 끝난 뒤 다시 눌러 주세요.");
+  }
 }
+
+// 상단바 높이만큼 기사 표 제목 줄을 아래에 붙인다 (창 폭에 따라 상단바 줄 수가 바뀜)
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--header-h", `${document.querySelector("header").offsetHeight}px`);
+}).observe(document.querySelector("header"));
 
 $("btn-collect").addEventListener("click", () => collect(true));
 function checkedIds() {
@@ -438,8 +476,11 @@ function checkedIds() {
 }
 
 function showArchiveInfo(info) {
-  $("archive-info").textContent = `DB 누적 ${info.total}행`;
-  $("archive-info").title = `저장 위치: ${info.folder}`;
+  const years = Object.keys(info.by_year || {});
+  $("archive-info").textContent = `${info.year}년 DB ${info.year_total}행` + (years.length > 1 ? ` · 전체 ${info.total}행` : "");
+  $("archive-info").title = `저장 위치: ${info.folder} (연도별 koita_news_연도 파일)` +
+    years.map(y => `\n${y}년: ${info.by_year[y]}행`).join("") +
+    ((info.copy_dirs || []).length ? `\n복사본: ${info.copy_dirs.join(", ")}` : "");
 }
 
 $("btn-export").addEventListener("click", async () => {
@@ -486,7 +527,7 @@ $("btn-archive").addEventListener("click", async () => {
     if (r.categorized) message += `\n이미 있던 ${r.categorized}행의 분류를 새로 고른 값으로 바꿨습니다.`;
     if (r.removed) message += `\n예전에 들어간 중복 ${r.removed}행도 정리했습니다.`;
     message += `\nDB는 게재일시 최신순으로 정렬됐습니다.`;
-    message += `\nDB 누적 ${r.total}행`;
+    message += `\nDB 전체 ${r.total}행` + (r.years && r.years.length ? ` (저장한 연도: ${r.years.join(", ")}년)` : "");
     if (r.warnings.length) message += `\n\n${r.warnings.join("\n")}`;
     alert(message);
     checked.clear();
@@ -512,10 +553,28 @@ $("date-to").addEventListener("change", loadArticles);
 $("filter").addEventListener("input", renderArticles);
 for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
+// 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
+function keepAlive(info) {
+  if (!info || !info.window_mode || !window.EventSource) return;
+  new EventSource("/api/alive");  // 이 탭이 열려 있는 동안 서버에 연결을 붙잡아 둔다
+  const banner = () => document.getElementById("offline-banner") || document.body.insertAdjacentElement("afterbegin",
+    Object.assign(document.createElement("div"), { id: "offline-banner",
+      style: "position:fixed;top:0;left:0;right:0;z-index:99;background:#b91c1c;color:#fff;padding:10px 16px;text-align:center;font-weight:600",
+      textContent: "프로그램이 꺼졌습니다. GoodMorningKOITA.vbs를 다시 실행한 뒤 이 탭을 새로 고침(F5)하세요." }));
+  // 서버가 살아 있는지 10초마다 확인. 두 번 연속 응답이 없으면(절전에서 깨어나는 잠깐은 넘김) 안내를 띄운다
+  let misses = 0;
+  setInterval(() => {
+    fetch("/healthz", { cache: "no-store" })
+      .then(r => { if (!r.ok) throw 0; misses = 0; document.getElementById("offline-banner")?.remove(); })
+      .catch(() => { if (++misses >= 2) banner(); });
+  }, 10000);
+}
+
 // 첫 화면: 키워드를 보여주고, 바로 어제 0시부터의 기사를 검색
 (async () => {
   renderKeywords(await api("/api/keywords"));
   const info = await api("/api/status");
+  keepAlive(info);
   $("version").textContent = `v${info.version}`;
   categories = info.categories || [];
   $("bulk-category").insertAdjacentHTML("beforeend",

@@ -16,6 +16,7 @@ DB를 고치지는 않는다. 결과를 보고 편집기(또는 cli.py --apply)�
 import json
 import os
 import re
+import shutil
 import unicodedata
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
@@ -25,6 +26,7 @@ FILE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".t
 TITLE_MATCH = 0.75       # 제목이 이만큼 비슷하면 같은 기사 후보 (매체명이 같을 때)
 TITLE_MATCH_ANY = 0.9    # 매체명이 달라도 제목이 이만큼 비슷하면 후보 (매체명 표기가 다른 경우)
 MISSING_FILE_MARGIN = 3
+TRASH_DIR = "_삭제한 파일"  # '지면 파일 삭제'로 옮겨 둔 파일이 들어가는 하위 폴더 (비교에서 빠짐, 다시 꺼낼 수 있음)
 # 일치 의심: 매체가 같고, 날짜 ±1일 이내면 제목 조각이 20% 이상, 날짜가 멀어도 50% 이상 겹치면
 SUSPECT_DAYS = 1
 SUSPECT_OVERLAP_NEAR = 0.2
@@ -176,8 +178,53 @@ def list_files(folder):
         raise FileNotFoundError(f"폴더를 찾을 수 없습니다: {folder}")
     return sorted(
         str(p.relative_to(root)) for p in root.rglob("*")
-        if p.is_file() and p.suffix.lower() in FILE_EXTENSIONS
+        if p.is_file() and p.suffix.lower() in FILE_EXTENSIONS and TRASH_DIR not in p.relative_to(root).parts
     )
+
+
+def file_path(folder, name):
+    """폴더 안의 지면 기사 파일 경로 (list_files가 준 상대 경로). 폴더 밖이나 지면 파일이 아니면 FileNotFoundError"""
+    root = Path(folder).expanduser().resolve()
+    path = (root / name).resolve()
+    if root not in path.parents or path.suffix.lower() not in FILE_EXTENSIONS or not path.is_file():
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {name}")
+    return path
+
+
+def trash_file(folder, name):
+    """
+    지면 기사 파일을 지우지 않고 폴더 안 '_삭제한 파일' 하위 폴더로 옮긴다 (잘못 지웠으면 다시 꺼내면 됨).
+    같은 이름이 이미 있으면 뒤에 (2), (3)…을 붙인다. 이 파일의 직접 연결 기록도 지운다. 반환: 옮긴 경로
+    """
+    path = file_path(folder, name)
+    trash = Path(folder).expanduser().resolve() / TRASH_DIR
+    if trash in path.parents:
+        raise FileNotFoundError(f"이미 삭제 폴더에 있는 파일입니다: {name}")
+    trash.mkdir(exist_ok=True)
+    target, n = trash / path.name, 2
+    while target.exists():
+        target = trash / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    shutil.move(str(path), str(target))
+    if path.name in load_links():
+        save_link(path.name, None)
+    return target
+
+
+def published_diff(rows):
+    """
+    지면 행인데 게재일시(published_at)의 날짜가 지면 날짜(date)와 다른 행.
+    고칠 값은 지면 날짜 00:00 (지면에는 시각이 없음). 반환: [{"seq", "date", "press", "type", "title", "published_at", "fix"}]
+    """
+    out = []
+    for r in rows:
+        kind, day = r.get("type") or "", r.get("date") or ""
+        if not kind or kind in ("온라인", "방송") or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            continue
+        if str(r.get("published_at") or "")[:10] != day:
+            out.append({k: r.get(k) for k in ("seq", "date", "press", "type", "title", "published_at")}
+                       | {"fix": f"{day}T00:00:00+09:00"})
+    return out
 
 
 def title_score(a, b):

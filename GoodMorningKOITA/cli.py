@@ -4,11 +4,14 @@ GoodMorningKOITA 명령줄 실행 (화면 없이, AI 에이전트·예약 작업
 결과는 항상 표준 출력에 JSON 한 덩어리로 나온다. 종료 코드: 0 = 정상(문제 없음), 1 = 확인할 문제가 있음, 2 = 실행 오류
 
 사용법 (프로그램 폴더에서, run.bat이 만든 .venv의 파이썬으로):
-  python cli.py print-check [--folder 폴더] [--apply]
+  python cli.py print-check [--folder 폴더] [--apply] [--fix-published] [--year 2026]
       지면 기사 파일명(.env NEWSPAPER_DIR 또는 --folder)과 기사 DB 지면 행의 날짜·지면을 비교.
       --apply: 틀린 날짜·지면을 파일명 값으로 DB(SQLite·CSV·JSON)에 바로 고친다
-  python cli.py archive-rows
-      기사 DB 전체 행을 JSON으로
+      --fix-published: 게재일시가 지면 날짜와 다른 지면 행(published_diff)을 지면 날짜 00:00으로 고친다
+  python cli.py archive-rows [--year 2026]
+      기사 DB 전체 행을 JSON으로 (연도별 DB koita_news_2026 …, --year 없으면 모든 연도)
+  python cli.py stats [--from 2026-01-01] [--to 2026-12-31]
+      기사 DB 분석 (총·온라인·지면·방송 건수, 년도별·월별·분류별·언론사별). DB 행 수 기준, 기간은 '날짜' 열
 """
 
 import argparse
@@ -22,6 +25,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import archive  # noqa: E402
 import printcheck  # noqa: E402
+import stats  # noqa: E402
 
 
 def out(data, code):
@@ -37,29 +41,46 @@ def print_check(args):
         names = printcheck.list_files(folder)
     except FileNotFoundError as exc:
         return out({"ok": False, "error": str(exc)}, 2)
-    data = archive.editor_data()
-    result = printcheck.compare(names, data["rows"], printcheck.load_links()) | {"source": folder}
-    applied = 0
+    # 비교할 연도 DB: --year, 없으면 모든 연도. 연번은 연도마다 1부터라 "2026:12"처럼 연도를 붙여 구분한다
+    chosen = [args.year] if args.year else archive.years()
+    datas = {y: archive.editor_data(y) for y in chosen}
+    rows = [r | {"seq": f"{y}:{r['seq']}"} for y, d in datas.items() for r in d["rows"]]
+    result = printcheck.compare(names, rows, printcheck.load_links()) | {"source": folder, "years": chosen}
+    applied = published_fixed = 0
+    by_seq = {f"{y}:{r['seq']}": r for y, d in datas.items() for r in d["rows"]}
     if args.apply:
-        by_seq = {r["seq"]: r for r in data["rows"]}
         for f in result["files"]:
             if f["status"] == "mismatch" and f["row"] and f["fix"]:
                 by_seq[f["row"]["seq"]].update(f["fix"])
                 applied += 1
-        if applied:
-            try:
-                result["saved"] = archive.replace_all(data["rows"], data["revision"])
-            except archive.EditError as exc:
-                return out({"ok": False, "error": str(exc), "problems": exc.problems}, 2)
+    current = [r | {"seq": key} for key, r in by_seq.items()]  # 날짜를 고친 뒤의 값
+    if args.fix_published:
+        for d in printcheck.published_diff(current):
+            by_seq[d["seq"]]["published_at"] = d["fix"]
+            published_fixed += 1
+    result["published_diff"] = [] if published_fixed else printcheck.published_diff(current)
+    if applied or published_fixed:
+        result["saved"] = {}
+        try:
+            for y, d in datas.items():
+                result["saved"][str(y)] = archive.replace_all(d["rows"], d["revision"], y)
+        except archive.EditError as exc:
+            return out({"ok": False, "error": str(exc), "problems": exc.problems}, 2)
     result["applied"] = applied
+    result["published_fixed"] = published_fixed
     s = result["summary"]
     problems = s["mismatch"] + s["parse_error"] + s["no_match"] + s["duplicate"]
     result["ok"] = problems == 0 or (args.apply and s["parse_error"] + s["no_match"] + s["duplicate"] == 0)
     return out(result, 0 if result["ok"] else 1)
 
 
-def archive_rows(_args):
-    return out({"ok": True, "rows": archive.all_rows()}, 0)
+def archive_rows(args):
+    rows = archive.all_rows(args.year)
+    return out({"ok": True, "year": args.year, "years": archive.years(), "rows": rows}, 0)
+
+
+def stats_cmd(args):
+    return out({"ok": True} | stats.summarize(archive.all_rows(), args.date_from, args.date_to), 0)
 
 
 def main(argv=None):
@@ -68,8 +89,16 @@ def main(argv=None):
     p = sub.add_parser("print-check", help="지면 기사 파일명과 기사 DB 지면 날짜 비교")
     p.add_argument("--folder", help="지면 기사 폴더 (기본: .env NEWSPAPER_DIR)")
     p.add_argument("--apply", action="store_true", help="틀린 날짜·지면을 DB에 바로 고치기")
+    p.add_argument("--fix-published", action="store_true", help="지면 행 게재일시를 지면 날짜 00:00으로 고치기")
+    p.add_argument("--year", type=int, help="비교할 연도 DB (기본: 모든 연도)")
     p.set_defaults(run=print_check)
-    sub.add_parser("archive-rows", help="기사 DB 전체 행 출력").set_defaults(run=archive_rows)
+    p = sub.add_parser("archive-rows", help="기사 DB 전체 행 출력")
+    p.add_argument("--year", type=int, help="연도 DB (기본: 모든 연도)")
+    p.set_defaults(run=archive_rows)
+    p = sub.add_parser("stats", help="기사 DB 분석 (건수 집계)")
+    p.add_argument("--from", dest="date_from", help="시작 날짜 YYYY-MM-DD (포함)")
+    p.add_argument("--to", dest="date_to", help="끝 날짜 YYYY-MM-DD (포함)")
+    p.set_defaults(run=stats_cmd)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

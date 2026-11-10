@@ -82,6 +82,8 @@
   .reason { color: #c2410c; font-size: 12px; }
   .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
   .acts button { padding: 2px 8px; font-size: 12px; }
+  .acts button.danger { color: var(--red); }
+  .acts button.danger:hover { border-color: var(--red); }
   tr.picker > td { background: #f8fafc; }
   .cands { max-height: 260px; overflow: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
   .cand { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; border-bottom: 1px solid var(--line); }
@@ -103,6 +105,7 @@
 <body>
 <header>
   <h1>📝 기사 DB 편집 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
+  <select id="year" class="tool" title="고칠 연도 DB (koita_news_연도). 기사 '날짜' 열의 연도로 나뉩니다"></select>
   <button id="btn-save" class="primary" title="Ctrl+S. SQLite 원본과 CSV·JSON 사본을 모두 똑같이 바꿉니다">저장</button>
   <button id="btn-reload" title="저장된 DB를 다시 불러오기 (저장 안 한 수정은 사라짐)">다시 불러오기</button>
   <span class="sep"></span>
@@ -194,6 +197,7 @@ const EDITABLE = FIELDS.filter(f => !f.readonly).map(f => f.name);
 
 let rows = [];          // {_id, seq, orig, cur, deleted, isNew}
 let revision = "";
+let year = null;  // 지금 고치는 연도 DB
 let categories = [];
 let nextId = 1;
 let sortBy = null;      // {name, dir}
@@ -234,6 +238,10 @@ const changedCount = () => rows.filter(rowChanged).length;
 
 function load(data) {
   revision = data.revision;
+  year = data.year;
+  $("year").innerHTML = data.years.slice().reverse()
+    .map(y => `<option value="${y}" ${y === year ? "selected" : ""}>${y}년 DB</option>`).join("");
+  $("year").title = `지금 고치는 파일: ${data.file}. 기사 '날짜' 열의 연도로 DB가 나뉩니다`;
   categories = data.categories;
   fillBulkCategory();
   rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
@@ -244,10 +252,21 @@ function load(data) {
 async function reload(ask = true) {
   if (ask && changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다시 불러올까요?")) return;
   try {
-    load(await api("/api/archive/rows"));
+    load(await api(`/api/archive/rows${year ? `?year=${year}` : ""}`));
     message("", "");
   } catch (err) { message("error", esc(err.message)); }
 }
+
+$("year").addEventListener("change", async (e) => {
+  const next = Number(e.target.value);
+  if (changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다른 연도 DB를 열까요?")) {
+    e.target.value = String(year);
+    return;
+  }
+  year = next;
+  $("check-panel").style.display = "none";  // 지면 확인 결과는 연도마다 다르다
+  await reload(false);
+});
 
 // ---------------- 표 그리기 ----------------
 
@@ -341,6 +360,30 @@ $("body").addEventListener("change", (e) => {
   const r = rowOf(e.target);
   r.picked = e.target.checked;
   e.target.closest("tr").classList.toggle("picked", r.picked);
+});
+
+// Shift 다중 체크: 마지막으로 누른 칸부터 Shift+클릭한 칸까지 화면에 보이는 순서대로 같은 상태로 바꾼다
+let lastPickId = null;
+$("body").addEventListener("click", (e) => {
+  if (e.target.dataset?.pick === undefined) return;
+  const id = rowOf(e.target)._id;
+  if (e.shiftKey && lastPickId !== null) {
+    const trs = [...$("body").querySelectorAll("tr[data-id]")];
+    const from = trs.findIndex(tr => Number(tr.dataset.id) === lastPickId);
+    const to = trs.findIndex(tr => Number(tr.dataset.id) === id);
+    if (from !== -1 && to !== -1) {
+      const on = e.target.checked;
+      for (const tr of trs.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+        const r = rowOf(tr);
+        r.picked = on;
+        tr.classList.toggle("picked", on);
+        const box = tr.querySelector("input[data-pick]");
+        if (box) box.checked = on;
+      }
+      window.getSelection()?.removeAllRanges();
+    }
+  }
+  lastPickId = id;
 });
 
 $("head").addEventListener("click", (e) => {
@@ -474,11 +517,14 @@ async function save() {
   const btn = $("btn-save");
   btn.disabled = true;
   try {
-    const body = { revision, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
+    const body = { revision, year, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
     const result = await api("/api/archive/rows", { method: "PUT", body });
     load(result);
-    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (DB ${result.total}행` +
+    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (${result.year}년 DB ${result.total}행` +
       (result.added ? ` · 추가 ${result.added}` : "") + (result.deleted ? ` · 삭제 ${result.deleted}` : "") + ")";
+    const moved = Object.entries(result.moved || {});
+    if (moved.length) text += `
+날짜가 다른 해인 행은 그 해 DB로 옮겼습니다: ` + moved.map(([y, n]) => `${y}년 ${n}행`).join(", ");
     text += "\n연번은 게재일시 최신순으로 다시 매겨졌습니다.";
     message(result.warnings.length ? "warn" : "ok", esc(text + (result.warnings.length ? "\n\n" + result.warnings.join("\n") : "")));
   } catch (err) {
@@ -558,10 +604,30 @@ $("btn-run-check").addEventListener("click", () => {
 });
 $("btn-pick").addEventListener("click", () => $("picker").click());
 $("picker").addEventListener("change", (e) => {
-  const names = [...e.target.files].map(f => f.webkitRelativePath || f.name);
+  const files = [...e.target.files];
+  const names = files.map(f => f.webkitRelativePath || f.name);
+  // 직접 고른 폴더는 서버가 못 읽으므로, 파일명을 누르면 브라우저가 가진 파일을 바로 연다
+  for (const url of pickedFiles.values()) URL.revokeObjectURL(url);
+  pickedFiles = new Map(files.map((f, i) => [names[i], f]));
   e.target.value = "";
   if (names.length) runCheck({ names });
 });
+
+let pickedFiles = new Map();  // '폴더 직접 고르기'로 고른 파일 (파일명 → File)
+
+// 지면 기사 파일 열기 (새 탭)
+function openPrintFile(name) {
+  if (lastSource && lastSource.names) {
+    const file = pickedFiles.get(name);
+    if (!file) { alert("파일을 찾을 수 없습니다. 폴더를 다시 골라 주세요."); return; }
+    const url = URL.createObjectURL(file);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
+  const q = new URLSearchParams({ name, folder: (lastSource && lastSource.folder) || "" });
+  window.open(`/api/print-check/file?${q}`, "_blank");
+}
 
 let lastSource = null;   // 마지막으로 비교한 폴더(또는 파일명 목록). 연결·등록 뒤 다시 비교할 때 씀
 let linkOpen = null;     // 연결할 DB 행을 고르는 중인 파일 (checkResult.files 번호)
@@ -569,6 +635,7 @@ let linkOpen = null;     // 연결할 DB 행을 고르는 중인 파일 (checkRe
 async function runCheck(source, keepTab = false) {
   lastSource = source;
   linkOpen = null;
+  findOpen = null;
   if (!keepTab) {
     $("check-summary").innerHTML = `<div class="muted">비교하는 중…</div>`;
     $("check-result").innerHTML = "";
@@ -594,13 +661,22 @@ const seqOf = (id) => {
   return r ? (r.isNew ? "새 행" : r.seq) : "?";
 };
 
+// 지면 행인데 게재일시 날짜가 지면 날짜와 다른 행 (표의 지금 값 기준). 고칠 값 = 지면 날짜 00:00
+const pubFix = (r) => `${r.cur.date}T00:00:00+09:00`;
+let pubSkip = new Set();  // '게재일시 다름'에서 체크를 푼 행
+function pubDiffRows() {
+  return rows.filter(r => !r.deleted && r.cur.type && isPrint(r.cur.type) && /^\d{4}-\d{2}-\d{2}$/.test(r.cur.date || "")
+                          && String(r.cur.published_at || "").slice(0, 10) !== r.cur.date);
+}
+
 function renderCheck() {
   const s = checkResult.summary;
+  const pubDiff = pubDiffRows();
   const fixable = checkResult.files.filter(f => (f.status === "mismatch" || f.status === "suspect") && Object.keys(f.fix).length).length;
   $("check-summary").innerHTML = `<div class="msg ${s.mismatch || s.suspect || s.parse_error || s.no_match || s.duplicate ? "warn" : "ok"}">` +
     `${esc(checkResult.source)}: 파일 ${s.files}개 ↔ DB 지면 ${s.print_rows}행\n` +
     `일치 ${s.ok} · 틀림 ${s.mismatch} · 일치 의심 ${s.suspect} · 파일명 오류 ${s.parse_error} · DB에 없음 ${s.no_match} · 중복 파일 ${s.duplicate}` +
-    ` · 파일 없는 DB 지면 행 ${s.missing}` +
+    ` · 파일 없는 DB 지면 행 ${s.missing} · 게재일시 다름 ${pubDiff.length}` +
     (s.suspect ? `\n일치 의심은 제목이 달라 확실하지 않은 짝입니다. 이유와 DB 제목을 보고 맞으면 체크하세요.` : "") +
     (fixable ? `\n고칠 수 있는 ${fixable}건은 아래에서 체크한 뒤 "표에 반영" → "저장"으로 고칠 수 있습니다.` : "") + `</div>`;
 
@@ -608,17 +684,36 @@ function renderCheck() {
     ["problem", `확인 필요 (${s.mismatch + s.suspect + s.parse_error + s.no_match + s.duplicate})`],
     ["all", `전체 파일 (${s.files})`],
     ["missing", `파일 없는 DB 지면 행 (${s.missing})`],
+    ["pubdiff", `게재일시 다름 (${pubDiff.length})`],
   ];
   $("check-tabs").innerHTML = tabs.map(([k, label]) =>
     `<button data-tab="${k}" class="${checkTab === k ? "on" : ""}">${label}</button>`).join("") +
     (fixable ? `<span class="sep"></span><button id="btn-apply" class="primary">체크한 수정을 표에 반영</button>` : "");
 
+  if (checkTab === "pubdiff") {
+    $("check-result").innerHTML = pubDiff.length ? `<div class="row" style="margin-bottom:6px">
+        <button id="btn-apply-pub" class="primary">체크한 게재일시를 표에 반영</button>
+        <span class="note">지면 행의 게재일시를 지면 날짜 00:00으로 맞춥니다. 반영한 뒤 <b>저장</b>을 눌러야 DB에 들어갑니다.</span></div>
+      <table class="result">
+      <thead><tr><th><input type="checkbox" id="pub-all" ${pubDiff.every(r => !pubSkip.has(r._id)) ? "checked" : ""} title="모두 체크/해제"></th>
+        <th>연번</th><th>지면 날짜</th><th>지금 게재일시</th><th>바꿀 게재일시</th><th>언론사명</th><th>구분</th><th>제목</th></tr></thead><tbody>` +
+      pubDiff.map(r => `<tr>
+        <td><input type="checkbox" data-pub="${r._id}" ${pubSkip.has(r._id) ? "" : "checked"}></td>
+        <td><span class="link" data-goto="${r._id}" data-field="published_at">${esc(seqOf(r._id))}</span></td>
+        <td>${esc(r.cur.date)}</td><td class="problem"><b>${esc(r.cur.published_at)}</b></td><td>${esc(pubFix(r))}</td>
+        <td>${esc(r.cur.press)}</td><td>${esc(r.cur.type)}</td><td>${esc(r.cur.title)}</td></tr>`).join("") +
+      `</tbody></table>`
+      : `<div class="muted">게재일시가 지면 날짜와 다른 지면 행이 없습니다.</div>`;
+    return;
+  }
   if (checkTab === "missing") {
     $("check-result").innerHTML = checkResult.missing.length ? `<table class="result">
-      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th></tr></thead><tbody>` +
+      <thead><tr><th>연번</th><th>날짜</th><th>언론사명</th><th>구분</th><th>제목</th><th>파일</th></tr></thead><tbody>` +
       checkResult.missing.map(m => `<tr>
         <td><span class="link" data-goto="${m.seq}" data-field="date">${esc(seqOf(m.seq))}</span></td>
-        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td></tr>`).join("") +
+        <td>${esc(m.date)}</td><td>${esc(m.press)}</td><td>${esc(m.type)}</td><td>${esc(m.title)}</td>
+        <td><div class="acts"><button data-find-file="${m.seq}" title="같은 매체이거나 날짜가 가까운 지면 파일을 후보로 보여 줍니다">파일 찾기</button></div></td></tr>` +
+        (findOpen === m.seq ? filePickerHtml(m) : "")).join("") +
       `</tbody></table><div class="note">파일 날짜 범위(앞뒤 3일) 안에 있는데 짝이 되는 파일이 없는 DB 지면 행입니다.</div>`
       : `<div class="muted">없습니다.</div>`;
     return;
@@ -639,7 +734,7 @@ function renderCheck() {
       return `<tr>
         <td>${canFix ? `<label title="표에 반영할 항목"><input type="checkbox" data-fix="${idx}" ${f.picked !== false ? "checked" : ""}></label>` : ""}</td>
         <td><span class="badge ${f.status}">${STATUS[f.status]}</span></td>
-        <td style="max-width:360px; overflow-wrap:anywhere">${esc(f.file)}</td>
+        <td style="max-width:360px; overflow-wrap:anywhere"><span class="link" data-open-file="${idx}" title="눌러서 파일 열기 (새 탭)">${esc(f.file)}</span></td>
         <td>${probs || `<span class="note">날짜 ${esc(f.date || "")} · 지면 ${esc(f.page_text || "")}</span>`}${notes}</td>
         <td>${row}</td></tr>` + (linkOpen === idx ? pickerHtml(f, idx) : "");
     }).join("") + `</tbody></table>` : `<div class="muted">확인이 필요한 파일이 없습니다. 모두 일치합니다.</div>`;
@@ -663,6 +758,9 @@ function actionsHtml(f, idx) {
   }
   if (f.row && (f.status === "suspect" || f.linked) && normText(f.row.title) !== normText(f.title)) {
     out.push(`<button data-retitle="${idx}" title="연결된 DB 지면 행의 제목을 파일(지면 기사)의 제목으로 바꿉니다">DB 제목을 지면 제목으로</button>`);
+  }
+  if (f.status === "no_match" && lastSource && lastSource.folder) {
+    out.push(`<button data-trash="${idx}" class="danger" title="파일명을 눌러 확인한 뒤, 실수로 저장한 파일이면 폴더 안 '_삭제한 파일' 폴더로 옮깁니다 (다시 꺼낼 수 있음)">지면 파일 삭제</button>`);
   }
   if (f.linked) out.push(`<button data-unlink="${idx}" title="직접 연결한 것을 끊고 다시 자동으로 찾습니다">연결 끊기</button>`);
   return out.length ? `<div class="acts">${out.join("")}</div>` : "";
@@ -699,6 +797,40 @@ function candsHtml(f, term) {
     `<div class="cand muted">${term ? "찾는 기사가 없습니다." : "같은 매체의 기사가 없습니다. 위 칸에서 제목으로 찾아보세요."}</div>`;
 }
 
+// ---------------- 파일 없는 DB 지면 행 → 파일 찾기 ----------------
+
+let findOpen = null;  // 파일을 찾는 중인 DB 지면 행 (표의 행 번호)
+
+function fileCandidates(m, term) {
+  const t = normText(term);
+  return checkResult.files
+    .map(f => ({ f, idx: checkResult.files.indexOf(f), gap: dayDiff(m.date, f.date), same: sameName(m.press, f.press) }))
+    .filter(x => t ? normText(x.f.file).includes(t) : (x.same || x.gap <= 3))
+    // 같은 매체 먼저, 그다음 날짜 가까운 순
+    .sort((a, b) => (b.same - a.same) || a.gap - b.gap)
+    .slice(0, 40);
+}
+
+function fileCandsHtml(m, term) {
+  return fileCandidates(m, term).map(({ f, idx, gap }) => `<div class="cand">
+      <span class="badge ${f.status}">${STATUS[f.status]}</span>
+      <span class="note">${esc(f.date || "날짜?")}${gap < 999 ? ` (${gap ? gap + "일 차이" : "같은 날"})` : ""}</span>
+      <span class="t"><span class="link" data-open-file="${idx}" title="눌러서 파일 열기 (새 탭)">${esc(f.file)}</span>
+        ${f.row ? `<span class="note">지금 짝: ${esc(seqOf(f.row.seq) === "새 행" ? "새 행" : "연번 " + seqOf(f.row.seq))}</span>` : ""}</span>
+      <button data-link-file="${idx}">이 파일과 연결</button></div>`).join("") ||
+    `<div class="cand muted">${term ? "찾는 파일이 없습니다." : "같은 매체이거나 날짜가 가까운(앞뒤 3일) 파일이 없습니다. 위 칸에서 파일명으로 찾아보세요."}</div>`;
+}
+
+function filePickerHtml(m) {
+  return `<tr class="picker"><td colspan="6">
+    <div class="row"><b>이 DB 행의 지면 파일 찾기</b>
+      <input type="text" id="file-search" placeholder="파일명으로 찾기 (비우면 같은 매체·날짜 앞뒤 3일 파일)" style="flex:1; min-width:240px">
+      <button data-close-find>닫기</button></div>
+    <div class="note">파일명을 누르면 새 탭에서 열어 볼 수 있습니다. 맞는 파일이면 "이 파일과 연결"을 누르세요. 연결은 기억해 두어 다음 확인 때도 이 행과 비교합니다.</div>
+    <div class="cands" id="file-cands">${fileCandsHtml(m, "")}</div>
+  </td></tr>`;
+}
+
 function newPrintRow(values) {
   const empty = Object.fromEntries(FIELDS.map(fl => [fl.name, ""]));
   const r = { _id: nextId++, seq: null, orig: { ...empty }, cur: { ...empty, url: "-", ...values }, deleted: false, isNew: true };
@@ -731,7 +863,35 @@ async function linkTo(f, target) {
 
 $("check-result").addEventListener("click", async (e) => {
   const t = e.target;
+  if (t.dataset.openFile !== undefined) { openPrintFile(checkResult.files[Number(t.dataset.openFile)].file); return; }
   try {
+    if (t.dataset.findFile !== undefined) {
+      findOpen = Number(t.dataset.findFile);
+      renderCheck();
+      $("file-search")?.focus();
+      return;
+    } else if (t.dataset.closeFind !== undefined) {
+      findOpen = null;
+      renderCheck();
+      return;
+    } else if (t.dataset.linkFile !== undefined) {
+      const f = checkResult.files[Number(t.dataset.linkFile)];
+      const r = rows.find(x => x._id === findOpen);
+      if (!r) return;
+      if (f.row && !confirm(`이 파일은 지금 ${seqOf(f.row.seq) === "새 행" ? "새 행" : "연번 " + seqOf(f.row.seq)}과 짝지어져 있습니다. 이 행으로 바꿔 연결할까요?`)) return;
+      await api("/api/print-check/link", { method: "POST", body: { file: f.file, press: r.cur.press, title: r.cur.title } });
+      findOpen = null;
+      message("ok", `파일을 ${r.isNew ? "새 행" : "연번 " + r.seq}과 연결했습니다. 다시 비교한 결과를 확인하세요.`);
+      await runCheck(lastSource, true);
+      return;
+    } else if (t.dataset.trash !== undefined) {
+      const f = checkResult.files[Number(t.dataset.trash)];
+      if (!confirm(`이 지면 파일을 삭제할까요?\n\n${f.file}\n\n완전히 지우지 않고 폴더 안 '_삭제한 파일' 폴더로 옮깁니다. 잘못 지웠으면 거기서 다시 꺼내면 됩니다.`)) return;
+      const res = await api("/api/print-check/trash", { method: "POST", body: { name: f.file, folder: lastSource.folder } });
+      message("ok", `파일을 옮겼습니다: ${esc(res.moved_to)}`);
+      await runCheck(lastSource, true);
+      return;
+    }
     if (t.dataset.openLink !== undefined) {
       linkOpen = Number(t.dataset.openLink);
       renderCheck();
@@ -768,6 +928,11 @@ $("check-result").addEventListener("click", async (e) => {
 });
 
 $("check-result").addEventListener("input", (e) => {
+  if (e.target.id === "file-search" && findOpen !== null) {
+    const m = checkResult.missing.find(x => x.seq === findOpen);
+    if (m) $("file-cands").innerHTML = fileCandsHtml(m, e.target.value);
+    return;
+  }
   if (e.target.id === "link-search" && linkOpen !== null) {
     $("link-cands").innerHTML = candsHtml(checkResult.files[linkOpen], e.target.value);
   }
@@ -776,6 +941,30 @@ $("check-result").addEventListener("input", (e) => {
 $("check-tabs").addEventListener("click", (e) => {
   if (e.target.dataset.tab) { checkTab = e.target.dataset.tab; renderCheck(); }
   if (e.target.id === "btn-apply") applyFixes();
+});
+$("check-result").addEventListener("change", (e) => {
+  if (e.target.dataset.pub !== undefined) {
+    const id = Number(e.target.dataset.pub);
+    e.target.checked ? pubSkip.delete(id) : pubSkip.add(id);
+  } else if (e.target.id === "pub-all") {
+    pubSkip = e.target.checked ? new Set() : new Set(pubDiffRows().map(r => r._id));
+    renderCheck();
+  }
+});
+$("check-result").addEventListener("click", (e) => {
+  if (e.target.id !== "btn-apply-pub") return;
+  let count = 0;
+  for (const r of pubDiffRows()) {
+    if (pubSkip.has(r._id)) continue;
+    r.cur.published_at = pubFix(r);
+    problems.delete(`${r._id}:published_at`);
+    count++;
+  }
+  render();
+  renderCheck();
+  message(count ? "warn" : "ok", count
+    ? `${count}행의 게재일시를 지면 날짜로 바꿨습니다(노란 칸). 확인한 뒤 <b>저장</b>을 눌러야 DB와 CSV·JSON에 들어갑니다.`
+    : "반영할 행이 없습니다.");
 });
 $("check-result").addEventListener("change", (e) => {
   if (e.target.dataset.fix !== undefined) checkResult.files[Number(e.target.dataset.fix)].picked = e.target.checked;
@@ -970,7 +1159,23 @@ $("import-tabs").addEventListener("click", (e) => {
 document.body.insertAdjacentHTML("beforeend",
   `<datalist id="type-list"><option>온라인</option><option>방송</option><option>A1면</option></datalist>`);
 reload(false);
-api("/api/status").then(info => { $("version").textContent = `v${info.version}`; }).catch(() => {});
+// 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
+function keepAlive(info) {
+  if (!info || !info.window_mode || !window.EventSource) return;
+  new EventSource("/api/alive");  // 이 탭이 열려 있는 동안 서버에 연결을 붙잡아 둔다
+  const banner = () => document.getElementById("offline-banner") || document.body.insertAdjacentElement("afterbegin",
+    Object.assign(document.createElement("div"), { id: "offline-banner",
+      style: "position:fixed;top:0;left:0;right:0;z-index:99;background:#b91c1c;color:#fff;padding:10px 16px;text-align:center;font-weight:600",
+      textContent: "프로그램이 꺼졌습니다. GoodMorningKOITA.vbs를 다시 실행한 뒤 이 탭을 새로 고침(F5)하세요." }));
+  // 서버가 살아 있는지 10초마다 확인. 두 번 연속 응답이 없으면(절전에서 깨어나는 잠깐은 넘김) 안내를 띄운다
+  let misses = 0;
+  setInterval(() => {
+    fetch("/healthz", { cache: "no-store" })
+      .then(r => { if (!r.ok) throw 0; misses = 0; document.getElementById("offline-banner")?.remove(); })
+      .catch(() => { if (++misses >= 2) banner(); });
+  }, 10000);
+}
+api("/api/status").then(info => { keepAlive(info); $("version").textContent = `v${info.version}`; }).catch(() => {});
 </script>
 </body>
 </html>
