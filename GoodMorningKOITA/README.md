@@ -8,7 +8,7 @@
 2. 이 폴더를 PC로 복사한 뒤 **`GoodMorningKOITA.vbs`**를 더블클릭합니다 (v1.4.0~). 바탕화면 바로가기도 이 파일로 만들면 됩니다.
    - 처음 한 번은 필요한 라이브러리를 설치하는 창이 뜨고 1~2분 걸립니다.
 3. 검은 CMD 창 없이 **크롬**에 프로그램 화면이 탭으로 열립니다 (크롬이 켜져 있으면 새 탭, 꺼져 있으면 새 창. 크롬이 없으면 기본 브라우저). `.vbs`는 프로그램을 켜 주는 파일일 뿐 따로 창이 뜨지 않습니다.
-   - 첫 화면·DB 편집·DB 분석 탭을 **모두 닫으면 20초쯤 뒤 프로그램도 끝납니다** (검색·DB 저장 중이면 끝난 뒤).
+   - 첫 화면·DB 편집·DB 분석 탭을 **모두 닫으면 2분쯤 뒤 프로그램도 끝납니다** (검색·DB 저장 중이면 끝난 뒤). 절전에서 깨어나는 동안처럼 잠깐 끊긴 것은 넘깁니다. 그래도 꺼지면 열린 탭 위에 "프로그램이 꺼졌습니다" 안내가 뜨니, vbs를 다시 실행하고 새로 고침하세요. 크롬 '메모리 절약'이 오래 안 본 탭을 잠재우면 꺼질 수 있습니다.
    - 이미 켜져 있을 때 다시 실행하면 크롬에 탭만 하나 더 열립니다. 다른 버전이 켜져 있으면 알려 주고 멈춥니다.
    - 화면에 안 보이는 기록은 프로그램 폴더의 `goodmorning.log`에 남습니다.
 4. 문제를 확인할 때(디버그)는 예전처럼 `run.bat`을 실행하면 CMD 창에 기록이 보이고, 그 창을 닫으면 끝납니다.
@@ -44,6 +44,7 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 | `SESSION_SECRET` | 켤 때마다 새로 만듦 | 넣으면 서버를 다시 켜도 로그인 유지 |
 | `DATA_DIR` | 프로그램 폴더 | `news.db`와 `database` 폴더를 둘 곳 |
 | `ARCHIVE_DIR` | `DATA_DIR/database` | 기사 DB 폴더만 따로 지정 |
+| `ARCHIVE_COPY_DIR` | (없음) | DB가 바뀔 때마다 기사 DB 세 파일을 이 폴더(예: 회사 드롭박스)에도 덮어씀. 여러 곳이면 `;`로 나눔 (v1.4.0~) |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | 서버 주소·포트 |
 | `OPEN_BROWSER` | 켬 | `0`이면 실행할 때 브라우저를 열지 않음 |
 | `NEWSPAPER_DIR` | 없음 | 지면보도 날짜 확인에 쓸 지면 기사 파일 폴더 |
@@ -119,23 +120,28 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 .venv\Scripts\python cli.py print-check                 # NEWSPAPER_DIR 폴더와 비교
 .venv\Scripts\python cli.py print-check --folder D:\지면 --apply   # 틀린 날짜·지면을 DB에 바로 고침
 .venv\Scripts\python cli.py print-check --fix-published   # 지면 행 게재일시를 지면 날짜 00:00으로 고침
-.venv\Scripts\python cli.py archive-rows                # 기사 DB 전체 행
+.venv\Scripts\python cli.py archive-rows --year 2026    # 기사 DB 행 (--year 없으면 모든 연도)
 .venv\Scripts\python cli.py stats --from 2026-01-01 --to 2026-12-31   # DB 분석 (총·구분·년도·월·분류·언론사별 건수)
 ```
 
 `print-check` 결과의 `published_diff`에 게재일시가 지면 날짜와 다른 지면 행이 나옵니다.
 
-웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows`(행과 `revision`), `PUT /api/archive/rows`(`{"revision", "rows"}`로 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김), `GET /api/archive/stats?date_from=&date_to=`(DB 분석, `cli.py stats`와 같은 JSON).
+웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows?year=2026`(연도 DB의 행과 `revision`, 비우면 올해), `PUT /api/archive/rows`(`{"revision", "rows", "year"}`로 그 연도 DB 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김), `GET /api/archive/stats?date_from=&date_to=`(DB 분석, `cli.py stats`와 같은 JSON).
 
 ## 기사 DB (다른 프로그램에서 읽기)
 
-`database` 폴더에 같은 내용이 세 가지 형식으로 있습니다. "DB 저장"을 누를 때마다 셋 다 갱신됩니다.
+`database` 폴더(`ARCHIVE_DIR`)에 **연도별로** 같은 내용이 세 가지 형식으로 있습니다 (v1.4.0~). "DB 저장"을 누를 때마다 셋 다 갱신됩니다.
 
 | 파일 | 형식 | 이런 데 쓰기 좋음 |
 |---|---|---|
-| `koita_news.sqlite` | SQLite (원본) | 프로그램에서 조건 검색. 파이썬·엑셀 파워쿼리·DB Browser 등 거의 모든 언어와 도구가 읽음 |
-| `koita_news.csv` | CSV (UTF-8) | 엑셀로 바로 열기, 다른 시스템에 올리기 |
-| `koita_news.json` | JSON | 웹 화면, 스크립트, 노션 등 API 연동 |
+| `koita_news_2026.sqlite` | SQLite (원본) | 프로그램에서 조건 검색. 파이썬·엑셀 파워쿼리·DB Browser 등 거의 모든 언어와 도구가 읽음 |
+| `koita_news_2026.csv` | CSV (UTF-8) | 엑셀로 바로 열기, 다른 시스템에 올리기 |
+| `koita_news_2026.json` | JSON | 웹 화면, 스크립트, 노션 등 API 연동 |
+
+- 어느 해 파일에 들어갈지는 행의 **날짜(`date`) 열의 연도**로 정합니다. 2027년 날짜의 행이 처음 저장되면 `koita_news_2027.*`이 자동으로 생깁니다. 연번은 연도마다 1부터입니다.
+- DB 편집 창 위쪽 연도 선택으로 고칠 연도 DB를 고릅니다. 날짜를 다른 해로 고치면 저장할 때 그 해 DB로 옮겨집니다. DB 분석 창은 모든 연도를 합쳐 봅니다.
+- v1.3.0까지 쓰던 `koita_news.sqlite/csv/json`은 처음 켤 때 연도별 파일로 나눠 옮기고, 원래 파일은 `database/_이전` 폴더에 날짜를 붙여 백업합니다.
+- `.env`에 `ARCHIVE_COPY_DIR`를 넣으면 DB가 바뀔 때마다 세 파일을 그 폴더에도 덮어씁니다(임시 파일에 다 쓴 뒤 바꿔치기). 복사본은 **보기용**이라 거기서 고치면 다음 저장 때 덮어써집니다. 복사가 안 되면 원본은 저장되고 안내만 뜹니다.
 
 SQLite가 원본이고 CSV·JSON은 저장할 때마다 원본에서 새로 만드는 사본입니다. 그래서 다른 프로그램은 **읽기만** 하고, 기사 추가·수정은 이 프로그램의 "DB 저장"과 "DB 편집" 창으로만 하는 것을 권장합니다(편집 창에서 저장하면 세 파일이 함께 바뀝니다). CSV를 엑셀로 열어 둔 채 저장하면 CSV만 갱신되지 않고 안내가 뜹니다(원본에는 저장됨).
 

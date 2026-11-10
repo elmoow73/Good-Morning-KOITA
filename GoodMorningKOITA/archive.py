@@ -1,10 +1,13 @@
 """
 기사 DB: 화면에서 체크한 기사를 엑셀과 같은 행 형태로 계속 쌓아 두는 별도 저장소
 
-다른 프로그램이 읽어 가도록 database/ 폴더에 같은 내용을 세 가지 형식으로 둔다.
-- koita_news.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 게재일시 최신순으로 다시 정렬한다
-- koita_news.csv    : 저장할 때마다 원본에서 다시 만드는 사본 (엑셀·메모장 등 어디서나 열림)
-- koita_news.json   : 저장할 때마다 원본에서 다시 만드는 사본 (웹·스크립트용)
+다른 프로그램이 읽어 가도록 database/ 폴더에 같은 내용을 세 가지 형식으로 둔다. v1.4.0부터 연도별 파일
+(기사 '날짜' 열의 연도. 2027년 기사가 처음 저장되면 koita_news_2027.*이 새로 생긴다):
+- koita_news_2026.sqlite : 원본. 중복 검사와 추가는 여기서 하고, 저장할 때마다 게재일시 최신순으로 다시 정렬한다
+- koita_news_2026.csv    : 저장할 때마다 원본에서 다시 만드는 사본 (엑셀·메모장 등 어디서나 열림)
+- koita_news_2026.json   : 저장할 때마다 원본에서 다시 만드는 사본 (웹·스크립트용)
+연번은 연도마다 1부터. 예전 하나짜리 koita_news.*는 처음 켤 때 연도별로 나눠 옮기고 database/_이전에 백업한다.
+.env ARCHIVE_COPY_DIR가 있으면 DB가 바뀔 때마다 세 파일을 그 폴더(예: 회사 드롭박스)에도 덮어쓴다 (보기용 복사본).
 
 수집용 news.db와 따로 두는 이유: news.db는 검색 결과를 임시로 모아 두는 곳이고,
 이 DB는 사람이 골라서 확정한 기사만 남는 곳이라 다른 프로그램이 믿고 쓸 수 있어야 한다.
@@ -14,6 +17,8 @@ import csv
 import hashlib
 import json
 import os
+import re
+import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -28,9 +33,33 @@ ARCHIVE_DIR = Path(
     os.getenv("ARCHIVE_DIR", "").strip()
     or Path(os.getenv("DATA_DIR", "").strip() or Path(__file__).parent) / "database"
 )
-SQLITE_PATH = ARCHIVE_DIR / "koita_news.sqlite"
-CSV_PATH = ARCHIVE_DIR / "koita_news.csv"
-JSON_PATH = ARCHIVE_DIR / "koita_news.json"
+DB_PREFIX = "koita_news"
+LEGACY_NAME = "koita_news"  # v1.3.0까지 쓰던 하나짜리 DB (연도 없음)
+BACKUP_DIR_NAME = "_이전"
+# DB가 바뀔 때마다 세 파일을 덮어쓸 복사본 폴더 (비우면 안 함). 여러 곳이면 ; 로 나눈다
+COPY_DIRS = [Path(p.strip()) for p in os.getenv("ARCHIVE_COPY_DIR", "").split(";") if p.strip()]
+
+
+def this_year():
+    return datetime.now().year
+
+
+def year_of(row):
+    """행이 들어갈 연도 DB: '날짜' 열의 연도 (없거나 이상하면 올해)"""
+    m = re.match(r"(\d{4})", str(row.get("date") or ""))
+    return int(m.group(1)) if m else this_year()
+
+
+def paths(year):
+    base = ARCHIVE_DIR / f"{DB_PREFIX}_{year}"
+    return {"sqlite": base.with_suffix(".sqlite"), "csv": base.with_suffix(".csv"), "json": base.with_suffix(".json")}
+
+
+def years():
+    """연도별 DB가 있는 연도들 (오래된 순). 하나도 없으면 [올해]"""
+    found = sorted({int(m.group(1)) for p in ARCHIVE_DIR.glob(f"{DB_PREFIX}_*.sqlite")
+                    if (m := re.fullmatch(rf"{DB_PREFIX}_(\d{{4}})\.sqlite", p.name))})
+    return found or [this_year()]
 
 # (DB 열 이름, CSV 머리글)
 COLUMNS = [
@@ -88,9 +117,9 @@ ALTER TABLE news_v13 RENAME TO news;
 
 
 @contextmanager
-def connect():
+def connect(year=None, path=None):
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(SQLITE_PATH)
+    conn = sqlite3.connect(path or paths(year or this_year())["sqlite"])
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
@@ -157,9 +186,9 @@ def make_row_key(row):
 
 def save(articles):
     """
-    기사들을 엑셀 행으로 바꿔 DB에 더한다. 이미 있는 기사는 건너뛰고, 전체를 기사 날짜순으로 다시 정렬한다.
+    기사들을 엑셀 행으로 바꿔 연도별 DB에 더한다. 이미 있는 기사는 건너뛰고, 전체를 기사 날짜순으로 다시 정렬한다.
     이미 있는 행이라도 이번에 분류를 골라 저장했으면 그 행의 분류를 새 값으로 덮어쓴다.
-    반환: {"added", "skipped", "categorized", "removed", "total", "warnings"}
+    반환: {"added", "skipped", "categorized", "removed", "total", "years", "warnings"}
     """
     saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
     new_rows = [
@@ -172,56 +201,116 @@ def save(articles):
         for r in exporter.to_rows(articles)
     ]
 
-    with connect() as conn:
-        existing = stored_rows(conn)
-        # 지면 행은 URL이 "-"라 날짜를 편집기에서 고치면 키가 달라진다. 같은 언론사·제목의 지면 행이 이미 있으면
-        # 그 행과 같은 행으로 보고 새로 넣지 않는다 (날짜·지면 번호가 달라도. 사용자 결정 2026-11-03)
-        print_keys = {(r["press"], r["title"]): r["row_key"] for r in existing if is_print(r["type"])}
-        # 지면 확인에서 지면 행 제목을 지면 기사 제목으로 바꾼 경우, 예전(온라인) 제목으로 와도 같은 행으로 본다
-        for _ in range(3):  # 여러 번 바꾼 경우까지
-            for a in load_title_aliases():
-                if (a["press"], a["new"]) in print_keys:
-                    print_keys.setdefault((a["press"], a["old"]), print_keys[(a["press"], a["new"])])
-        for row in new_rows:
-            if is_print(row["type"]):
-                row["row_key"] = print_keys.get((row["press"], row["title"]), row["row_key"])
-        # 이미 저장된 행의 분류 덮어쓰기 (고르지 않은 "선택"은 예전 값을 그대로 둔다)
-        chosen = {r["row_key"]: r["category"] for r in new_rows if r["category"]}
-        categorized = 0
-        for row in existing:
-            if row["row_key"] in chosen and row["category"] != chosen[row["row_key"]]:
-                row["category"] = chosen[row["row_key"]]
-                categorized += 1
-        before = len(rewrite(conn, existing))  # 예전부터 있던 중복도 이번에 정리된다
-        total = len(rewrite(conn, existing + new_rows))
+    # 지면 행은 URL이 "-"라 날짜를 편집기에서 고치면 키가 달라진다. 같은 언론사·제목의 지면 행이 이미 있으면
+    # (어느 연도 DB든) 그 행과 같은 행으로 보고 새로 넣지 않는다 (날짜·지면 번호가 달라도. 사용자 결정 2026-11-03)
+    existing_by_year = {}
+    print_keys = {}
+    for year in years():
+        with connect(year) as conn:
+            existing_by_year[year] = stored_rows(conn)
+        for r in existing_by_year[year]:
+            if is_print(r["type"]):
+                print_keys[(r["press"], r["title"])] = (year, r["row_key"])
+    # 지면 확인에서 지면 행 제목을 지면 기사 제목으로 바꾼 경우, 예전(온라인) 제목으로 와도 같은 행으로 본다
+    for _ in range(3):  # 여러 번 바꾼 경우까지
+        for a in load_title_aliases():
+            if (a["press"], a["new"]) in print_keys:
+                print_keys.setdefault((a["press"], a["old"]), print_keys[(a["press"], a["new"])])
+    by_year = {}
+    for row in new_rows:
+        year = year_of(row)
+        if is_print(row["type"]) and (row["press"], row["title"]) in print_keys:
+            year, row["row_key"] = print_keys[(row["press"], row["title"])]
+        by_year.setdefault(year, []).append(row)
 
-    added = total - before
+    added = categorized = removed = 0
+    warnings = []
+    for year, rows in sorted(by_year.items()):
+        with connect(year) as conn:
+            existing = stored_rows(conn)
+            # 이미 저장된 행의 분류 덮어쓰기 (고르지 않은 "선택"은 예전 값을 그대로 둔다)
+            chosen = {r["row_key"]: r["category"] for r in rows if r["category"]}
+            for row in existing:
+                if row["row_key"] in chosen and row["category"] != chosen[row["row_key"]]:
+                    row["category"] = chosen[row["row_key"]]
+                    categorized += 1
+            before = len(rewrite(conn, existing))  # 예전부터 있던 중복도 이번에 정리된다
+            total = len(rewrite(conn, existing + rows))
+        added += total - before
+        removed += len(existing) - before
+        warnings += write_copies(year)
     return {
         "added": added, "skipped": len(new_rows) - added, "categorized": categorized,
-        "removed": len(existing) - before, "total": total, "warnings": write_copies(),
+        "removed": removed, "total": info()["total"], "years": sorted(by_year), "warnings": warnings,
     }
 
 
+def migrate_legacy():
+    """
+    v1.3.0까지의 하나짜리 koita_news.sqlite를 연도별 DB(koita_news_2026 …)로 나눠 옮긴다 (처음 켤 때 한 번).
+    이미 연도별 DB가 있으면 합친다(같은 행은 하나만). 예전 파일(sqlite·csv·json)은 database/_이전으로 옮겨 둔다.
+    반환: {연도: 옮긴 행 수}
+    """
+    legacy = ARCHIVE_DIR / f"{LEGACY_NAME}.sqlite"
+    if not legacy.exists():
+        return {}
+    with connect(path=legacy) as conn:
+        rows = stored_rows(conn)
+    moved = {}
+    for row in rows:
+        moved.setdefault(year_of(row), []).append(row)
+    for year, part in moved.items():
+        with connect(year) as conn:
+            rewrite(conn, stored_rows(conn) + part)
+    backup = ARCHIVE_DIR / BACKUP_DIR_NAME
+    backup.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for old in ARCHIVE_DIR.glob(f"{LEGACY_NAME}.*"):
+        shutil.move(str(old), str(backup / f"{old.stem}_{stamp}{old.suffix}"))
+    for old in ARCHIVE_DIR.glob(f"{LEGACY_NAME}_갱신대기.*"):
+        shutil.move(str(old), str(backup / f"{old.stem}_{stamp}{old.suffix}"))
+    for year in moved:
+        write_copies(year)
+    return {year: len(part) for year, part in moved.items()}
+
+
 def tidy():
-    """프로그램을 켤 때 예전 DB의 중복을 정리하고 날짜순으로 맞춘다. 정리한 행 수를 돌려준다."""
-    with connect() as conn:
-        existing = stored_rows(conn)
-        if not existing:
-            return 0
-        removed = len(existing) - len(rewrite(conn, existing))
-    write_copies()
+    """프로그램을 켤 때 예전 DB를 연도별로 옮기고, 중복을 정리해 날짜순으로 맞춘다. 정리한 행 수를 돌려준다."""
+    migrate_legacy()
+    removed = 0
+    for year in years():
+        path = paths(year)["sqlite"]
+        if not path.exists():
+            continue
+        with connect(year) as conn:
+            existing = stored_rows(conn)
+            if not existing:
+                continue
+            removed += len(existing) - len(rewrite(conn, existing))
+        write_copies(year)
     return removed
 
 
-def all_rows():
+def all_rows(year=None):
+    """year 연도 DB의 행 (연번순). year가 None이면 모든 연도 DB의 행 (최근 연도부터)"""
     names = ", ".join(name for name, _ in COLUMNS)
-    with connect() as conn:
+    if year is None:
+        rows = []
+        for y in sorted(years(), reverse=True):
+            if paths(y)["sqlite"].exists():
+                rows += all_rows(y)
+        return rows
+    with connect(year) as conn:
         return [dict(r) for r in conn.execute(f"SELECT {names} FROM news ORDER BY seq")]
 
 
-def write_copies():
-    """CSV·JSON 사본을 원본과 똑같이 다시 만든다. 파일이 열려 있어 못 쓰면 안내 문구를 돌려준다."""
-    rows = all_rows()
+def write_copies(year):
+    """
+    year 연도 DB의 CSV·JSON 사본을 원본과 똑같이 다시 만들고, ARCHIVE_COPY_DIR(드롭박스 등)에도 세 파일을 덮어쓴다.
+    파일이 열려 있거나 복사본 폴더를 못 쓰면 안내 문구를 돌려준다 (원본 저장은 그대로 됨).
+    """
+    rows = all_rows(year)
+    files = paths(year)
     warnings = []
 
     def write(path, fill):
@@ -257,15 +346,62 @@ def write_copies():
         with open(temp, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=1)
 
-    write(CSV_PATH, fill_csv)
-    write(JSON_PATH, fill_json)
+    write(files["csv"], fill_csv)
+    write(files["json"], fill_json)
+    warnings += copy_out(year)
+    return warnings
+
+
+def copy_out(year):
+    """
+    ARCHIVE_COPY_DIR 폴더에 year 연도 DB 세 파일을 덮어쓴다 (보기용 복사본).
+    드롭박스가 반쯤 쓴 파일을 올리지 않도록 같은 폴더의 임시 파일에 다 쓴 뒤 한 번에 바꾼다. 실패하면 안내 문구
+    """
+    warnings = []
+    files = paths(year)
+    for folder in COPY_DIRS:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            for kind, src in files.items():
+                if not src.exists():
+                    continue
+                dest = folder / src.name
+                temp = folder / f".{src.name}.tmp"
+                if kind == "sqlite":
+                    # SQLite는 쓰는 중에도 온전한 사본이 되도록 backup API로 복사
+                    temp.unlink(missing_ok=True)
+                    source, target = sqlite3.connect(src), sqlite3.connect(temp)
+                    try:
+                        source.backup(target)
+                    finally:
+                        source.close()
+                        target.close()
+                else:
+                    shutil.copyfile(src, temp)
+                for attempt in range(5):
+                    try:
+                        os.replace(temp, dest)
+                        break
+                    except PermissionError:
+                        time.sleep(1)
+                else:
+                    temp.unlink(missing_ok=True)
+                    raise PermissionError(f"{dest.name}이(가) 열려 있습니다")
+        except OSError as exc:
+            warnings.append(f"드롭박스(복사본) 복사 실패: {folder} ({exc}). 원본은 저장됐고, 다음에 DB가 바뀔 때 다시 복사합니다.")
     return warnings
 
 
 def info():
-    with connect() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
-    return {"total": total, "folder": str(ARCHIVE_DIR.resolve())}
+    """기사 DB 요약: 전체 행 수, 연도별 행 수, 폴더, 복사본 폴더"""
+    by_year = {}
+    for year in years():
+        if paths(year)["sqlite"].exists():
+            with connect(year) as conn:
+                by_year[year] = conn.execute("SELECT COUNT(*) FROM news").fetchone()[0]
+    return {"total": sum(by_year.values()), "by_year": by_year, "year": this_year(),
+            "year_total": by_year.get(this_year(), 0), "folder": str(ARCHIVE_DIR.resolve()),
+            "copy_dirs": [str(p) for p in COPY_DIRS]}
 
 
 def aliases_path():
@@ -294,9 +430,13 @@ def add_title_alias(press, old, new):
 
 
 def saved_categories():
-    """화면에서 '저장됨' 표시와 분류를 보여 주려고, DB에 들어간 온라인 기사 {URL: 분류}"""
-    with connect() as conn:
-        return {r[0]: r[1] for r in conn.execute("SELECT url, category FROM news WHERE type = '온라인'")}
+    """화면에서 '저장됨' 표시와 분류를 보여 주려고, DB(모든 연도)에 들어간 온라인 기사 {URL: 분류}"""
+    out = {}
+    for year in years():
+        if paths(year)["sqlite"].exists():
+            with connect(year) as conn:
+                out.update({r[0]: r[1] for r in conn.execute("SELECT url, category FROM news WHERE type = '온라인'")})
+    return out
 
 
 # ---------------- DB 편집기 ----------------
@@ -307,9 +447,13 @@ def revision(rows):
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def editor_data():
-    rows = all_rows()
-    return {"rows": rows, "revision": revision(rows), "categories": CATEGORIES,
+def editor_data(year=None):
+    """편집기에 줄 year 연도 DB (비우면 올해)"""
+    year = int(year or this_year())
+    rows = all_rows(year)
+    return {"rows": rows, "revision": revision(rows), "categories": CATEGORIES, "year": year,
+            "years": sorted(set(years()) | {this_year(), year}),
+            "file": paths(year)["sqlite"].name,
             "columns": [{"name": n, "header": h} for n, h in COLUMNS]}
 
 
@@ -374,26 +518,39 @@ def clean_edited_rows(rows, old_by_seq, saved_at):
     return cleaned
 
 
-def replace_all(rows, base_revision):
+def replace_all(rows, base_revision, year=None):
     """
-    편집기에서 고친 전체 행으로 DB를 바꾼다. SQLite를 바꾼 뒤 CSV·JSON 사본도 똑같이 다시 만든다.
+    편집기에서 고친 year 연도 DB 전체 행으로 그 DB를 바꾼다. SQLite를 바꾼 뒤 CSV·JSON 사본도 똑같이 다시 만든다.
+    날짜를 다른 해로 고쳤거나 다른 해 날짜로 넣은 행은 그 해 DB로 옮긴다(같은 행이 있으면 하나만).
     base_revision: 편집기를 열 때 받은 지문. 그사이 DB가 바뀌었으면 덮어쓰지 않고 EditError
     """
+    year = int(year or this_year())
     saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    with connect() as conn:
+    with connect(year) as conn:
         names = ", ".join(name for name, _ in COLUMNS)
         current = [dict(r) for r in conn.execute(f"SELECT {names} FROM news ORDER BY seq")]
         if revision(current) != base_revision:
             raise EditError("편집기를 연 뒤 다른 곳에서 DB가 바뀌었습니다. 다시 불러온 뒤 고쳐 주세요.")
         old_by_seq = {r["seq"]: r for r in current}
         cleaned = clean_edited_rows(rows, old_by_seq, saved_at)
+        here = [r for r in cleaned if year_of(r) == year]
+        elsewhere = [r for r in cleaned if year_of(r) != year]
         # 예전 행은 먼저 저장된 순서를 지키고, 새로 넣은 행은 뒤에
-        cleaned.sort(key=lambda r: (r["saved_at"], r["seq"] or 10**9))
-        kept = rewrite(conn, cleaned)
-        kept_seqs = {r["seq"] for r in cleaned if r["seq"]}
+        here.sort(key=lambda r: (r["saved_at"], r["seq"] or 10**9))
+        kept = rewrite(conn, here)
+        kept_seqs = {r["seq"] for r in here if r["seq"]}
+    warnings = write_copies(year)
+    moved = {}
+    for row in elsewhere:
+        moved.setdefault(year_of(row), []).append(row)
+    for other, part in sorted(moved.items()):
+        with connect(other) as conn:
+            rewrite(conn, stored_rows(conn) + part)
+        warnings += write_copies(other)
     return {
         "total": len(kept),
-        "added": sum(1 for r in cleaned if not r["seq"]),
-        "deleted": len(set(old_by_seq) - kept_seqs),
-        "warnings": write_copies(),
+        "added": sum(1 for r in here if not r["seq"]),
+        "deleted": len(set(old_by_seq) - kept_seqs - {r["seq"] for r in elsewhere}),
+        "moved": {str(k): len(v) for k, v in moved.items()},
+        "warnings": warnings,
     }

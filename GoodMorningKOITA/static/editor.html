@@ -105,6 +105,7 @@
 <body>
 <header>
   <h1>📝 기사 DB 편집 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
+  <select id="year" class="tool" title="고칠 연도 DB (koita_news_연도). 기사 '날짜' 열의 연도로 나뉩니다"></select>
   <button id="btn-save" class="primary" title="Ctrl+S. SQLite 원본과 CSV·JSON 사본을 모두 똑같이 바꿉니다">저장</button>
   <button id="btn-reload" title="저장된 DB를 다시 불러오기 (저장 안 한 수정은 사라짐)">다시 불러오기</button>
   <span class="sep"></span>
@@ -196,6 +197,7 @@ const EDITABLE = FIELDS.filter(f => !f.readonly).map(f => f.name);
 
 let rows = [];          // {_id, seq, orig, cur, deleted, isNew}
 let revision = "";
+let year = null;  // 지금 고치는 연도 DB
 let categories = [];
 let nextId = 1;
 let sortBy = null;      // {name, dir}
@@ -236,6 +238,10 @@ const changedCount = () => rows.filter(rowChanged).length;
 
 function load(data) {
   revision = data.revision;
+  year = data.year;
+  $("year").innerHTML = data.years.slice().reverse()
+    .map(y => `<option value="${y}" ${y === year ? "selected" : ""}>${y}년 DB</option>`).join("");
+  $("year").title = `지금 고치는 파일: ${data.file}. 기사 '날짜' 열의 연도로 DB가 나뉩니다`;
   categories = data.categories;
   fillBulkCategory();
   rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
@@ -246,10 +252,21 @@ function load(data) {
 async function reload(ask = true) {
   if (ask && changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다시 불러올까요?")) return;
   try {
-    load(await api("/api/archive/rows"));
+    load(await api(`/api/archive/rows${year ? `?year=${year}` : ""}`));
     message("", "");
   } catch (err) { message("error", esc(err.message)); }
 }
+
+$("year").addEventListener("change", async (e) => {
+  const next = Number(e.target.value);
+  if (changedCount() && !confirm("저장하지 않은 수정이 있습니다. 버리고 다른 연도 DB를 열까요?")) {
+    e.target.value = String(year);
+    return;
+  }
+  year = next;
+  $("check-panel").style.display = "none";  // 지면 확인 결과는 연도마다 다르다
+  await reload(false);
+});
 
 // ---------------- 표 그리기 ----------------
 
@@ -500,11 +517,14 @@ async function save() {
   const btn = $("btn-save");
   btn.disabled = true;
   try {
-    const body = { revision, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
+    const body = { revision, year, rows: sent.map(r => ({ ...r.cur, seq: r.isNew ? null : r.seq })) };
     const result = await api("/api/archive/rows", { method: "PUT", body });
     load(result);
-    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (DB ${result.total}행` +
+    let text = `저장했습니다. SQLite·CSV·JSON 모두 같은 내용으로 바꿨습니다. (${result.year}년 DB ${result.total}행` +
       (result.added ? ` · 추가 ${result.added}` : "") + (result.deleted ? ` · 삭제 ${result.deleted}` : "") + ")";
+    const moved = Object.entries(result.moved || {});
+    if (moved.length) text += `
+날짜가 다른 해인 행은 그 해 DB로 옮겼습니다: ` + moved.map(([y, n]) => `${y}년 ${n}행`).join(", ");
     text += "\n연번은 게재일시 최신순으로 다시 매겨졌습니다.";
     message(result.warnings.length ? "warn" : "ok", esc(text + (result.warnings.length ? "\n\n" + result.warnings.join("\n") : "")));
   } catch (err) {
@@ -1140,7 +1160,21 @@ document.body.insertAdjacentHTML("beforeend",
   `<datalist id="type-list"><option>온라인</option><option>방송</option><option>A1면</option></datalist>`);
 reload(false);
 // 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
-function keepAlive(info) { if (info && info.window_mode && window.EventSource) new EventSource("/api/alive"); }
+function keepAlive(info) {
+  if (!info || !info.window_mode || !window.EventSource) return;
+  new EventSource("/api/alive");  // 이 탭이 열려 있는 동안 서버에 연결을 붙잡아 둔다
+  const banner = () => document.getElementById("offline-banner") || document.body.insertAdjacentElement("afterbegin",
+    Object.assign(document.createElement("div"), { id: "offline-banner",
+      style: "position:fixed;top:0;left:0;right:0;z-index:99;background:#b91c1c;color:#fff;padding:10px 16px;text-align:center;font-weight:600",
+      textContent: "프로그램이 꺼졌습니다. GoodMorningKOITA.vbs를 다시 실행한 뒤 이 탭을 새로 고침(F5)하세요." }));
+  // 서버가 살아 있는지 10초마다 확인. 두 번 연속 응답이 없으면(절전에서 깨어나는 잠깐은 넘김) 안내를 띄운다
+  let misses = 0;
+  setInterval(() => {
+    fetch("/healthz", { cache: "no-store" })
+      .then(r => { if (!r.ok) throw 0; misses = 0; document.getElementById("offline-banner")?.remove(); })
+      .catch(() => { if (++misses >= 2) banner(); });
+  }, 10000);
+}
 api("/api/status").then(info => { keepAlive(info); $("version").textContent = `v${info.version}`; }).catch(() => {});
 </script>
 </body>

@@ -9,7 +9,7 @@
 # 출력: 마지막 결과를 stdout에 JSON 한 줄. 종료 코드: 0 성공, 4 드라이브 미연결, 1 그 밖의 오류
 #
 # 드라이브에 올라가는 것
-#   GoodMorningKOITA/최신/koita_news.sqlite·csv·json, news.db   (늘 최신으로 덮어씀)
+#   GoodMorningKOITA/최신/koita_news_연도.sqlite·csv·json (연도별 모두), news.db   (늘 최신으로 덮어씀)
 #   GoodMorningKOITA/날짜별/YYYY-MM-DD/...                         (KEEP_DAYS일 지나면 지움)
 set -euo pipefail
 
@@ -46,14 +46,14 @@ snap="$(mktemp -d)"; trap 'rm -rf "$snap"' EXIT
 python3 - "$KOITA_DATA" "$snap" <<'PY'
 import pathlib, shutil, sqlite3, sys
 src, dst = map(pathlib.Path, sys.argv[1:])
-for db in [src / "news.db", src / "database" / "koita_news.sqlite"]:
+archive = src / "database"
+for db in [src / "news.db", *sorted(archive.glob("koita_news*.sqlite"))]:  # 연도별 DB(koita_news_2026 …) 모두
     if db.exists():
-        with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as s, sqlite3.connect(dst / db.name) as d:
-            s.backup(d)
-for name in ["koita_news.csv", "koita_news.json"]:
-    f = src / "database" / name
-    if f.exists():
-        shutil.copy2(f, dst / name)
+        s, d = sqlite3.connect(f"file:{db}?mode=ro", uri=True), sqlite3.connect(dst / db.name)
+        s.backup(d)
+        s.close(); d.close()
+for f in [*archive.glob("koita_news*.csv"), *archive.glob("koita_news*.json")]:
+    shutil.copy2(f, dst / f.name)
 PY
 
 today="$(TZ=Asia/Seoul date +%F)"

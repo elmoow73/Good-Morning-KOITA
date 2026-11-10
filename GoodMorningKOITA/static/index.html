@@ -476,8 +476,11 @@ function checkedIds() {
 }
 
 function showArchiveInfo(info) {
-  $("archive-info").textContent = `DB 누적 ${info.total}행`;
-  $("archive-info").title = `저장 위치: ${info.folder}`;
+  const years = Object.keys(info.by_year || {});
+  $("archive-info").textContent = `${info.year}년 DB ${info.year_total}행` + (years.length > 1 ? ` · 전체 ${info.total}행` : "");
+  $("archive-info").title = `저장 위치: ${info.folder} (연도별 koita_news_연도 파일)` +
+    years.map(y => `\n${y}년: ${info.by_year[y]}행`).join("") +
+    ((info.copy_dirs || []).length ? `\n복사본: ${info.copy_dirs.join(", ")}` : "");
 }
 
 $("btn-export").addEventListener("click", async () => {
@@ -524,7 +527,7 @@ $("btn-archive").addEventListener("click", async () => {
     if (r.categorized) message += `\n이미 있던 ${r.categorized}행의 분류를 새로 고른 값으로 바꿨습니다.`;
     if (r.removed) message += `\n예전에 들어간 중복 ${r.removed}행도 정리했습니다.`;
     message += `\nDB는 게재일시 최신순으로 정렬됐습니다.`;
-    message += `\nDB 누적 ${r.total}행`;
+    message += `\nDB 전체 ${r.total}행` + (r.years && r.years.length ? ` (저장한 연도: ${r.years.join(", ")}년)` : "");
     if (r.warnings.length) message += `\n\n${r.warnings.join("\n")}`;
     alert(message);
     checked.clear();
@@ -551,7 +554,21 @@ $("filter").addEventListener("input", renderArticles);
 for (const id of ["press-filter", "kw-filter", "source-filter", "sort"]) $(id).addEventListener("change", renderArticles);
 
 // 창 모드: 이 창이 열려 있는 동안 서버에 연결을 붙잡아 둔다 (프로그램 창을 모두 닫으면 서버가 스스로 끝남)
-function keepAlive(info) { if (info && info.window_mode && window.EventSource) new EventSource("/api/alive"); }
+function keepAlive(info) {
+  if (!info || !info.window_mode || !window.EventSource) return;
+  new EventSource("/api/alive");  // 이 탭이 열려 있는 동안 서버에 연결을 붙잡아 둔다
+  const banner = () => document.getElementById("offline-banner") || document.body.insertAdjacentElement("afterbegin",
+    Object.assign(document.createElement("div"), { id: "offline-banner",
+      style: "position:fixed;top:0;left:0;right:0;z-index:99;background:#b91c1c;color:#fff;padding:10px 16px;text-align:center;font-weight:600",
+      textContent: "프로그램이 꺼졌습니다. GoodMorningKOITA.vbs를 다시 실행한 뒤 이 탭을 새로 고침(F5)하세요." }));
+  // 서버가 살아 있는지 10초마다 확인. 두 번 연속 응답이 없으면(절전에서 깨어나는 잠깐은 넘김) 안내를 띄운다
+  let misses = 0;
+  setInterval(() => {
+    fetch("/healthz", { cache: "no-store" })
+      .then(r => { if (!r.ok) throw 0; misses = 0; document.getElementById("offline-banner")?.remove(); })
+      .catch(() => { if (++misses >= 2) banner(); });
+  }, 10000);
+}
 
 // 첫 화면: 키워드를 보여주고, 바로 어제 0시부터의 기사를 검색
 (async () => {

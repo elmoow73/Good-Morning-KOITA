@@ -197,7 +197,7 @@ def status():
 # ---------------- 창 모드: 프로그램 창이 모두 닫히면 서버도 끝낸다 ----------------
 
 WINDOW_MODE = False         # launcher.py(GoodMorningKOITA.vbs)로 켰을 때 True
-WINDOW_GRACE_SECONDS = 20   # 마지막 창이 닫힌 뒤 이만큼 기다렸다 끈다 (새로고침·창 이동 중 끊김 대비)
+WINDOW_GRACE_SECONDS = 120  # 마지막 탭이 닫힌 뒤 이만큼 기다렸다 끈다 (절전에서 깨어남·탭 잠깐 끊김 대비, v1.4.0-rc.7 20→120초)
 FIRST_WINDOW_SECONDS = 180  # 켠 뒤 창이 한 번도 안 붙으면 이만큼 뒤에 끈다
 open_windows = 0
 open_windows_lock = threading.Lock()
@@ -341,14 +341,15 @@ def save_to_archive(body: Selection):
 # ---------------- 기사 DB 편집기 ----------------
 
 @app.get("/api/archive/rows")
-def archive_rows():
-    """기사 DB 전체 행과 지문(revision). 저장할 때 이 지문을 같이 보낸다"""
-    return archive.editor_data()
+def archive_rows(year: int | None = None):
+    """기사 DB(연도별, 비우면 올해) 전체 행과 지문(revision). 저장할 때 이 지문과 연도를 같이 보낸다"""
+    return archive.editor_data(year)
 
 
 class ArchiveEdit(BaseModel):
     revision: str
     rows: list[dict]
+    year: int | None = None  # 고친 연도 DB (비우면 올해)
 
 
 @app.put("/api/archive/rows")
@@ -356,11 +357,11 @@ def replace_archive_rows(body: ArchiveEdit):
     """편집기에서 고친 전체 행으로 기사 DB(SQLite)를 바꾸고 CSV·JSON도 똑같이 다시 만든다"""
     with archive_lock:
         try:
-            result = archive.replace_all(body.rows, body.revision)
+            result = archive.replace_all(body.rows, body.revision, body.year)
         except archive.EditError as exc:
             status = 422 if exc.problems else 409
             return JSONResponse({"detail": str(exc), "problems": exc.problems}, status_code=status)
-    return result | archive.editor_data()
+    return result | archive.editor_data(body.year)
 
 
 class PrintCheck(BaseModel):
