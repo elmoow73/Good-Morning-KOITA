@@ -11,7 +11,16 @@ GoodMorningKOITA 명령줄 실행 (화면 없이, AI 에이전트·예약 작업
   python cli.py archive-rows [--year 2026]
       기사 DB 전체 행을 JSON으로 (연도별 DB koita_news_2026 …, --year 없으면 모든 연도)
   python cli.py stats [--from 2026-01-01] [--to 2026-12-31]
-      기사 DB 분석 (총·온라인·지면·방송 건수, 년도별·월별·분류별·언론사별). DB 행 수 기준, 기간은 '날짜' 열
+      기사 DB 분석 (총·온라인·지면·방송 건수, 년도별·월별·분류별·언론사별 + 보도자료별). DB 행 수 기준, 기간은 '날짜' 열
+  python cli.py press-releases [--folder 폴더] [--from 2026-01-01] [--to 2026-12-31]
+      보도자료 목록(.env PRESSRELEASE_DIR 파일명)과 보도자료별 연결 기사·건수, 미연결 [보도자료] 기사. 기간은 배포일
+      종료 코드 1 = 미연결 기사·읽지 못한 파일·DB에서 사라진 연결 기사가 있음
+  python cli.py press-release-candidates --id 보도자료ID
+      보도자료 1건의 연결 후보 (분류 '보도자료'이고 아직 연결 안 된 기사. near = 배포일 -1~+7일, 제목 비슷한 순)
+  python cli.py press-release-link --id 보도자료ID --key 기사키 [--key 기사키 ...]
+      기사를 보도자료에 연결 (기사키 = 후보·미연결 목록의 key). 기사 하나는 보도자료 하나에만
+  python cli.py press-release-unlink --key 기사키 [--key ...]
+      연결 끊기
 """
 
 import argparse
@@ -24,6 +33,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import archive  # noqa: E402
+import pressrelease  # noqa: E402
 import printcheck  # noqa: E402
 import stats  # noqa: E402
 
@@ -80,7 +90,49 @@ def archive_rows(args):
 
 
 def stats_cmd(args):
-    return out({"ok": True} | stats.summarize(archive.all_rows(), args.date_from, args.date_to), 0)
+    rows = archive.all_rows()
+    result = stats.summarize(rows, args.date_from, args.date_to)
+    result["press_releases"] = pressrelease.stats_section(args.date_from, args.date_to, rows)
+    return out({"ok": True} | result, 0)
+
+
+def press_releases_cmd(args):
+    data = pressrelease.overview(args.folder, None, None, args.date_from, args.date_to)
+    s = data["summary"]
+    data["ok"] = not (s["unlinked"] or s["missing_articles"] or data["file_errors"])
+    return out(data, 0 if data["ok"] else 1)
+
+
+def find_release(release_id, folder=None):
+    """보도자료ID → 보도자료 (폴더 파일 또는 연결표에서)"""
+    for r in pressrelease.overview(folder)["releases"]:
+        if r["id"] == release_id:
+            return r
+    return None
+
+
+def press_release_candidates_cmd(args):
+    release = find_release(args.id, args.folder)
+    if release is None:
+        return out({"ok": False, "error": f"보도자료를 찾을 수 없습니다: {args.id}"}, 2)
+    return out({"ok": True, "release": release} | pressrelease.candidates(release), 0)
+
+
+def press_release_link_cmd(args):
+    release = find_release(args.id, args.folder)
+    if release is None:
+        return out({"ok": False, "error": f"보도자료를 찾을 수 없습니다: {args.id}"}, 2)
+    try:
+        return out({"ok": True} | pressrelease.link(release, args.key), 0)
+    except pressrelease.LinkError as exc:
+        return out({"ok": False, "error": str(exc)}, 1)
+
+
+def press_release_unlink_cmd(args):
+    try:
+        return out({"ok": True} | pressrelease.unlink(args.key), 0)
+    except pressrelease.LinkError as exc:
+        return out({"ok": False, "error": str(exc)}, 1)
 
 
 def main(argv=None):
@@ -99,6 +151,23 @@ def main(argv=None):
     p.add_argument("--from", dest="date_from", help="시작 날짜 YYYY-MM-DD (포함)")
     p.add_argument("--to", dest="date_to", help="끝 날짜 YYYY-MM-DD (포함)")
     p.set_defaults(run=stats_cmd)
+    p = sub.add_parser("press-releases", help="보도자료별 연결 기사·건수")
+    p.add_argument("--folder", help="보도자료 폴더 (기본: .env PRESSRELEASE_DIR)")
+    p.add_argument("--from", dest="date_from", help="배포일 시작 YYYY-MM-DD (포함)")
+    p.add_argument("--to", dest="date_to", help="배포일 끝 YYYY-MM-DD (포함)")
+    p.set_defaults(run=press_releases_cmd)
+    p = sub.add_parser("press-release-candidates", help="보도자료 1건의 연결 후보")
+    p.add_argument("--id", required=True, help="보도자료ID (press-releases 결과의 id)")
+    p.add_argument("--folder", help="보도자료 폴더 (기본: .env PRESSRELEASE_DIR)")
+    p.set_defaults(run=press_release_candidates_cmd)
+    p = sub.add_parser("press-release-link", help="기사를 보도자료에 연결")
+    p.add_argument("--id", required=True, help="보도자료ID")
+    p.add_argument("--key", action="append", required=True, help="기사키 (여러 번 가능)")
+    p.add_argument("--folder", help="보도자료 폴더 (기본: .env PRESSRELEASE_DIR)")
+    p.set_defaults(run=press_release_link_cmd)
+    p = sub.add_parser("press-release-unlink", help="보도자료 연결 끊기")
+    p.add_argument("--key", action="append", required=True, help="기사키 (여러 번 가능)")
+    p.set_defaults(run=press_release_unlink_cmd)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

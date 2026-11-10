@@ -27,6 +27,7 @@ import collector  # noqa: E402  (.env를 먼저 읽은 뒤 import)
 import db  # noqa: E402
 import exporter  # noqa: E402
 import printcheck  # noqa: E402
+import pressrelease  # noqa: E402
 import stats  # noqa: E402
 
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
@@ -100,7 +101,114 @@ def analysis():
 @app.get("/api/archive/stats")
 def archive_stats(date_from: str | None = None, date_to: str | None = None):
     """기사 DB 분석 결과 JSON (DB 행 수 기준). date_from·date_to: YYYY-MM-DD, 비우면 전체"""
-    return stats.summarize(archive.all_rows(), date_from or None, date_to or None)
+    rows = archive.all_rows()
+    result = stats.summarize(rows, date_from or None, date_to or None)
+    with archive_lock:  # 연결표 키를 고쳐 저장할 수도 있어서
+        result["press_releases"] = pressrelease.stats_section(date_from or None, date_to or None, rows)
+    return result
+
+
+# ---------------- 보도자료 ↔ 기사 연결 (v1.5.0) ----------------
+
+@app.get("/pressrelease")
+def pressrelease_page():
+    """보도자료 창: 보도자료 폴더의 파일 목록과 보도자료별 연결 기사·건수, 연결 후보"""
+    return FileResponse(BASE_DIR / "static" / "pressrelease.html", headers={"Cache-Control": "no-store"})
+
+
+class PressReleaseQuery(BaseModel):
+    folder: str | None = None       # 서버(이 프로그램이 도는 PC)의 폴더. 비우면 .env PRESSRELEASE_DIR
+    names: list[str] | None = None  # 브라우저에서 고른 폴더의 파일명 (폰·클라우드 서버에서 쓸 때)
+    date_from: str | None = None    # 배포일 기간 YYYY-MM-DD (포함)
+    date_to: str | None = None
+
+
+@app.get("/api/press-releases")
+def press_releases(date_from: str | None = None, date_to: str | None = None, folder: str | None = None):
+    """보도자료 목록(폴더 파일명) + 보도자료별 연결 기사·건수 + 미연결 [보도자료] 기사"""
+    with archive_lock:
+        return pressrelease.overview(folder, None, None, date_from or None, date_to or None)
+
+
+@app.post("/api/press-releases")
+def press_releases_post(body: PressReleaseQuery):
+    with archive_lock:
+        return pressrelease.overview(body.folder, body.names, None, body.date_from or None, body.date_to or None)
+
+
+class ReleaseRef(BaseModel):
+    id: str | None = None
+    date: str
+    kind: str | None = ""
+    title: str
+
+
+@app.post("/api/press-releases/candidates")
+def press_release_candidates(body: ReleaseRef):
+    """보도자료 1건의 연결 후보 (분류 '보도자료'이고 아직 연결 안 된 기사, 배포일 -1일 ~ +7일, 제목이 비슷한 순)"""
+    try:
+        with archive_lock:
+            return pressrelease.candidates(body.model_dump())
+    except ValueError:
+        raise HTTPException(400, "배포일은 2026-11-09 형식이어야 합니다.")
+
+
+class ReleaseLink(BaseModel):
+    release: ReleaseRef
+    keys: list[str]  # 기사 DB 행 키 (후보·미연결 목록의 key)
+
+
+@app.post("/api/press-releases/link")
+def press_release_link(body: ReleaseLink):
+    """체크한 기사들을 보도자료에 연결한다 (기사 하나는 보도자료 하나에만)"""
+    with archive_lock:
+        try:
+            return pressrelease.link(body.release.model_dump(), body.keys)
+        except pressrelease.LinkError as exc:
+            raise HTTPException(409, str(exc))
+
+
+class ReleaseUnlink(BaseModel):
+    keys: list[str]
+
+
+@app.post("/api/press-releases/unlink")
+def press_release_unlink(body: ReleaseUnlink):
+    with archive_lock:
+        try:
+            return pressrelease.unlink(body.keys)
+        except pressrelease.LinkError as exc:
+            raise HTTPException(400, str(exc))
+
+
+@app.get("/api/press-releases/file")
+def press_release_file(name: str, folder: str | None = None):
+    """보도자료 파일을 연다 (pdf는 브라우저에서 바로, hwpx 등은 내려받기)"""
+    folder = (folder or "").strip() or pressrelease.default_folder()
+    try:
+        path = pressrelease.file_path(folder, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    disposition = "inline" if path.suffix.lower() == ".pdf" else "attachment"
+    return FileResponse(path, headers={"Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(path.name)}"})
+
+
+@app.post("/api/press-releases/open")
+def press_release_open(body: PressReleaseQuery, request: Request):
+    """이 프로그램이 도는 PC에서 보도자료 파일을 기본 프로그램(한글 등)으로 연다. 윈도우 PC에서, 그 PC의 화면에서 누를 때만"""
+    import sys
+    if not request.client or request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(400, "다른 기기에서는 PC에서 바로 열 수 없습니다. 내려받기로 여세요.")
+    name = (body.names or [""])[0]
+    folder = (body.folder or "").strip() or pressrelease.default_folder()
+    try:
+        path = pressrelease.file_path(folder, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    if sys.platform != "win32":
+        raise HTTPException(400, "PC에서 바로 열기는 윈도우 PC에서만 됩니다. 내려받기로 여세요.")
+    os.startfile(path)  # noqa: S606 (보도자료 폴더 안 파일만)
+    return {"ok": True}
 
 
 @app.get("/editor")

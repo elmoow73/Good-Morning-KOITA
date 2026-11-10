@@ -48,6 +48,7 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | 서버 주소·포트 |
 | `OPEN_BROWSER` | 켬 | `0`이면 실행할 때 브라우저를 열지 않음 |
 | `NEWSPAPER_DIR` | 없음 | 지면보도 날짜 확인에 쓸 지면 기사 파일 폴더 |
+| `PRESSRELEASE_DIR` | 없음 | 보도자료 창에 쓸 보도자료 파일 폴더 (v1.5.0~) |
 
 ## 화면에서 할 수 있는 일
 
@@ -128,6 +129,43 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 
 웹 API로도 같은 일을 할 수 있습니다: `GET /api/archive/rows?year=2026`(연도 DB의 행과 `revision`, 비우면 올해), `PUT /api/archive/rows`(`{"revision", "rows", "year"}`로 그 연도 DB 전체 교체), `POST /api/print-check`(`{"folder"}` 또는 `{"names": [파일명...]}`), `GET /api/print-check/file?name=<파일명>&folder=<폴더>`(지면 기사 파일 자체, 화면에서 파일명을 누르면 새 탭에 열림), `POST /api/print-check/trash`(`{"name", "folder"}`, 파일을 폴더 안 `_삭제한 파일`로 옮김), `GET /api/archive/stats?date_from=&date_to=`(DB 분석, `cli.py stats`와 같은 JSON).
 
+## 보도자료별 기사 건수 (v1.5.0~)
+
+첫 화면 [보도자료] 버튼 → 새 창. 보도자료 하나가 기사 몇 건으로 나왔는지 봅니다.
+
+- **보도자료 목록**은 `.env` `PRESSRELEASE_DIR` 폴더(하위 폴더 포함)의 파일 이름에서 읽습니다. 파일을 넣기만 하면 됩니다.
+  - 형식: `배포일_[종류] 보도자료명.확장자` (예: `2026-11-09_[보도자료] 2026년 하반기 탄소중립 K-Tech 포럼 개최.hwpx`). 배포일은 `20261109`, `2026.11.09`도 읽고, `[종류]`(보도자료·보도참고자료 등)는 없어도 됩니다
+  - 배포일과 보도자료명이 같은 파일(hwpx·pdf 등)은 한 건으로 묶습니다(띄어쓰기·기호 차이 무시). 형식이 안 맞는 파일은 위에 "읽지 못한 파일"로 보입니다
+  - 파일 이름을 누르면 이 PC에서는 한글·PDF 프로그램으로 열고, 다른 기기에서는 내려받습니다
+- **연결**: 보도자료를 고르면 **연결 후보**가 나옵니다. 분류가 [보도자료]이고 아직 어디에도 연결 안 된 기사 DB 행 중 기사 날짜가 배포일 하루 전 ~ 7일 뒤인 것을 제목이 비슷한 순으로 보여 주고, 제목 낱말이 많이 겹치면 "추천"으로 미리 체크해 둡니다. 확인하고 [체크한 기사 연결]을 눌러야 저장됩니다. 기간 밖 기사도 "기간 밖의 미연결 기사도 보기"로 고를 수 있습니다
+  - 기사 하나(DB 1행)는 보도자료 하나에만 연결됩니다. 다른 보도자료로 옮기려면 먼저 [체크한 기사 연결 끊기]
+  - 온라인·지면·방송 행을 각각 1건으로 셉니다 (DB 분석과 같음). 같은 기사의 지면·방송 행도 후보에 같이 나오니 함께 체크하면 됩니다
+  - **미연결 [보도자료] 기사** 탭: 어느 보도자료에도 연결되지 않은 [보도자료] 기사를 모아 보고, 보도자료를 골라 한꺼번에 연결
+  - 기사 DB 편집 창에서 지면 행의 날짜·제목을 고쳐도 연결은 따라갑니다(언론사·제목·URL로 다시 찾음). 기사를 지웠으면 "사라진 기사"로 표시되고 연결을 지울 수 있습니다. 연결된 기사의 분류가 [보도자료]가 아니게 바뀌면 표시만 합니다
+- **DB 분석** 창 맨 아래 "보도자료별": 기간(배포일 기준) 안의 보도자료 수, 연결된 기사 수(온라인·지면·방송), 1건당 평균, 미연결 [보도자료] 기사 수, 보도자료별 건수 표
+
+연결은 기사 DB와 따로 `database` 폴더의 **보도자료 연결표**에 저장합니다(기사 DB 열은 그대로). 배포일 연도별로 `koita_pressrelease_2026.sqlite`(원본)·`.csv`·`.json`이 생기고, `ARCHIVE_COPY_DIR`(드롭박스)에도 복사됩니다. 한 줄이 "보도자료 1건 ↔ 기사 1행"입니다.
+
+| 열 (SQLite 테이블 `links`) | CSV 머리글 | 내용 |
+|---|---|---|
+| `seq` | 연번 | 배포일 최신순 번호 (저장할 때마다 다시 매김) |
+| `release_id` | 보도자료ID | 배포일 + 보도자료명(띄어쓰기·기호 뺀 것). 예 `2026-11-09_2026년하반기탄소중립ktech포럼개최` |
+| `release_date` / `release_kind` / `release_title` | 배포일 / 종류 / 보도자료명 | 파일 이름에서 읽은 값 |
+| `article_date` / `press` / `type` / `title` / `url` | 기사날짜 / 언론사명 / 구분 / 기사제목 / URL | 연결한 기사 DB 행 |
+| `article_key` | 기사키 | 기사 DB 행 키 (온라인·방송 `d\|URL\|구분`, 지면 `p\|날짜\|언론사\|구분\|제목`) |
+| `linked_at` | 연결일시 | |
+
+화면 없이 (AI 에이전트용, JSON 출력):
+
+```
+python cli.py press-releases [--from 2026-01-01] [--to 2026-12-31] [--folder 폴더]   # 보도자료별 건수·연결 기사·미연결 기사 (종료 코드 1 = 미연결 기사 등 확인할 것 있음)
+python cli.py press-release-candidates --id 보도자료ID                                # 연결 후보 (near = 배포일 -1~+7일)
+python cli.py press-release-link --id 보도자료ID --key 기사키 [--key ...]             # 연결
+python cli.py press-release-unlink --key 기사키 [--key ...]                          # 연결 끊기
+```
+
+`cli.py stats`와 `GET /api/archive/stats` 결과에도 `press_releases`(보도자료별 건수)가 들어갑니다. 웹 API: `GET/POST /api/press-releases`, `POST /api/press-releases/candidates`, `POST /api/press-releases/link`(`{"release": {"id","date","kind","title"}, "keys": [...]}`), `POST /api/press-releases/unlink`(`{"keys": [...]}`), `GET /api/press-releases/file?name=`.
+
 ## 기사 DB (다른 프로그램에서 읽기)
 
 `database` 폴더(`ARCHIVE_DIR`)에 **연도별로** 같은 내용이 세 가지 형식으로 있습니다 (v1.4.0~). "DB 저장"을 누를 때마다 셋 다 갱신됩니다.
@@ -183,6 +221,8 @@ DB는 저장할 때마다 게재일시(published_at) 최신순(같은 기사의 
 | `GoodMorningKOITA.vbs`, `launcher.py`, `window.py` | CMD 창 없이 실행 (프로그램 창을 모두 닫으면 종료) |
 | `run.bat` | CMD 창에서 실행 (디버그용), `run.bat --setup`은 라이브러리 설치만 |
 | `stats.py` | DB 분석 집계 (DB 분석 창·`cli.py stats`) |
+| `pressrelease.py` | 보도자료 목록·기사 연결표 (보도자료 창) |
+| `static/pressrelease.html` | 보도자료 창 |
 | `static/analysis.html` | DB 분석 창 |
 | `static/editor.html` | DB 편집 창 |
 | `exporter.py` | 엑셀 만들기 |

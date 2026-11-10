@@ -304,61 +304,69 @@ def all_rows(year=None):
         return [dict(r) for r in conn.execute(f"SELECT {names} FROM news ORDER BY seq")]
 
 
-def write_copies(year):
+def write_file(path, fill):
     """
-    year 연도 DB의 CSV·JSON 사본을 원본과 똑같이 다시 만들고, ARCHIVE_COPY_DIR(드롭박스 등)에도 세 파일을 덮어쓴다.
-    파일이 열려 있거나 복사본 폴더를 못 쓰면 안내 문구를 돌려준다 (원본 저장은 그대로 됨).
+    fill(임시 파일)로 다 쓴 뒤 path로 바꿔치기한다. 엑셀 등에 열려 있어 못 바꾸면 옆에 _갱신대기 파일로 두고
+    안내 문구를 돌려준다 (문제없으면 None). 기사 DB·보도자료 연결표의 CSV·JSON 사본이 함께 쓴다.
     """
-    rows = all_rows(year)
-    files = paths(year)
-    warnings = []
-
-    def write(path, fill):
-        temp = path.with_suffix(path.suffix + ".tmp")
-        waiting = path.with_name(f"{path.stem}_갱신대기{path.suffix}")
-        fill(temp)
-        # 엑셀로 열려 있거나 OneDrive가 동기화하느라 잠깐 잠긴 경우가 있어 몇 번 다시 시도한다
-        for attempt in range(5):
-            try:
-                os.replace(temp, path)
-                waiting.unlink(missing_ok=True)  # 원래 파일에 저장됐으니 대기 파일은 필요 없다
-                return
-            except PermissionError:
-                time.sleep(1)
-        # 그래도 잠겨 있으면 옆에 최신 내용을 따로 저장해 둔다. 다음 저장 때 원래 파일로 다시 쓴다
+    temp = path.with_suffix(path.suffix + ".tmp")
+    waiting = path.with_name(f"{path.stem}_갱신대기{path.suffix}")
+    fill(temp)
+    # 엑셀로 열려 있거나 OneDrive가 동기화하느라 잠깐 잠긴 경우가 있어 몇 번 다시 시도한다
+    for attempt in range(5):
         try:
-            os.replace(temp, waiting)
-            place = f"최신 내용은 {waiting.name}에 저장해 두었고"
+            os.replace(temp, path)
+            waiting.unlink(missing_ok=True)  # 원래 파일에 저장됐으니 대기 파일은 필요 없다
+            return None
         except PermissionError:
-            temp.unlink(missing_ok=True)
-            place = "기사는 SQLite에 저장됐고"
-        warnings.append(f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
-                        f"{place}, 파일을 닫고 다시 DB 저장을 누르면 {path.name}에 반영됩니다.")
+            time.sleep(1)
+    # 그래도 잠겨 있으면 옆에 최신 내용을 따로 저장해 둔다. 다음 저장 때 원래 파일로 다시 쓴다
+    try:
+        os.replace(temp, waiting)
+        place = f"최신 내용은 {waiting.name}에 저장해 두었고"
+    except PermissionError:
+        temp.unlink(missing_ok=True)
+        place = "내용은 SQLite에 저장됐고"
+    return (f"{path.name} 파일이 다른 프로그램(엑셀 등)에 열려 있어 갱신하지 못했습니다. "
+            f"{place}, 파일을 닫고 다시 저장하면 {path.name}에 반영됩니다.")
 
+
+def write_table_copies(files, columns, rows):
+    """files(sqlite·csv·json 경로)의 CSV·JSON 사본을 rows로 다시 만든다. columns: [(열 이름, CSV 머리글)]"""
     def fill_csv(temp):
         # utf-8-sig: 엑셀에서 열어도 한글이 깨지지 않도록
         with open(temp, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow([header for _, header in COLUMNS])
-            writer.writerows([r[name] for name, _ in COLUMNS] for r in rows)
+            writer.writerow([header for _, header in columns])
+            writer.writerows([r[name] for name, _ in columns] for r in rows)
 
     def fill_json(temp):
         with open(temp, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=1)
 
-    write(files["csv"], fill_csv)
-    write(files["json"], fill_json)
-    warnings += copy_out(year)
-    return warnings
+    warnings = [write_file(files["csv"], fill_csv), write_file(files["json"], fill_json)]
+    return [w for w in warnings if w] + copy_files(files)
+
+
+def write_copies(year):
+    """
+    year 연도 DB의 CSV·JSON 사본을 원본과 똑같이 다시 만들고, ARCHIVE_COPY_DIR(드롭박스 등)에도 세 파일을 덮어쓴다.
+    파일이 열려 있거나 복사본 폴더를 못 쓰면 안내 문구를 돌려준다 (원본 저장은 그대로 됨).
+    """
+    return write_table_copies(paths(year), COLUMNS, all_rows(year))
 
 
 def copy_out(year):
+    """ARCHIVE_COPY_DIR 폴더에 year 연도 DB 세 파일을 덮어쓴다 (보기용 복사본)"""
+    return copy_files(paths(year))
+
+
+def copy_files(files):
     """
-    ARCHIVE_COPY_DIR 폴더에 year 연도 DB 세 파일을 덮어쓴다 (보기용 복사본).
+    ARCHIVE_COPY_DIR 폴더에 files(sqlite·csv·json) 세 파일을 덮어쓴다 (보기용 복사본).
     드롭박스가 반쯤 쓴 파일을 올리지 않도록 같은 폴더의 임시 파일에 다 쓴 뒤 한 번에 바꾼다. 실패하면 안내 문구
     """
     warnings = []
-    files = paths(year)
     for folder in COPY_DIRS:
         try:
             folder.mkdir(parents=True, exist_ok=True)
