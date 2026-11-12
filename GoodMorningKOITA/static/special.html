@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoodMorningKOITA 특별보도</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+    --accent: #2457d6; --accent-soft: #e8eefc; --warn: #b45309; --warn-soft: #fef3c7; --danger: #b91c1c;
+    --online: #2457d6; --print: #d97706; --broadcast: #15803d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 24px;
+           display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 18px; margin: 0 8px 0 0; }
+  button, input, select { font: inherit; }
+  select, input[type=date], input[type=search] { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; }
+  button, a.button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+           color: inherit; text-decoration: none; display: inline-block; }
+  button:hover, a.button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  main { max-width: 1400px; margin: 0 auto; padding: 20px 24px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .panel h3 .muted { font-weight: 400; }
+  .panel h3 { font-size: 14px; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .unlinked-note { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
+
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--panel); }
+  .card .label { color: var(--muted); font-size: 13px; }
+  .card .num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .num small { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .card .sub { color: var(--muted); font-size: 12px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; align-items: start; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  td.check, th.check { width: 28px; }
+  .scroll { max-height: 62vh; overflow: auto; }
+  .scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  tr.zero td.num b { color: #b6bcc6; }
+  .badge { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px; margin-left: 4px; white-space: nowrap;
+           background: #eef0f3; color: var(--muted); vertical-align: 1px; }
+  .badge.online { background: #e8eefc; color: var(--online); }
+  .badge.print { background: #fdf0dc; color: var(--print); }
+  .badge.broadcast { background: #e3f4e8; color: var(--broadcast); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.rec { background: #dcfce7; color: #15803d; }
+  .notice { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; }
+  .error { background: #fee2e2; color: var(--danger); border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
+  .ok { background: #dcfce7; color: #166534; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
+  .empty { color: var(--muted); padding: 16px; text-align: center; }
+  .files a { margin-right: 8px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 12px; background: none; }
+  .tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+  a.ext { text-decoration: none; color: var(--accent); }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    header, main { padding: 12px 16px; }
+    .scroll { max-height: none; }
+    header { position: static; }
+    #detail td.nowrap, #unlinked td.nowrap { white-space: normal; }
+    #detail td:nth-child(4), #unlinked td:nth-child(4) { min-width: 140px; }
+  }
+  .prop { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .prop .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .prop .head b { font-size: 14px; }
+  .prop input.title { flex: 1 1 320px; min-width: 200px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  .sub-badge { display: inline-block; font-size: 12px; border-radius: 4px; padding: 0 8px; white-space: nowrap; font-weight: 600; }
+  .sub-badge.기고 { background: #ede9fe; color: #6d28d9; }
+  .sub-badge.인터뷰 { background: #e0f2fe; color: #0369a1; }
+  .sub-badge.기획보도 { background: #fef3c7; color: #b45309; }
+  #groups tbody tr.g { cursor: pointer; }
+  #groups tbody tr.g:hover { background: #f8f9fb; }
+  #groups tbody tr.g.open { background: var(--accent-soft); }
+  #groups tr.detail > td { background: #fafbfc; padding: 12px; }
+  .detail .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .detail input.title { flex: 1 1 320px; min-width: 200px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  button.danger { color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>⭐ 특별보도 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
+  <div class="row">
+    <select id="preset" title="특별보도 날짜(묶음의 첫 기사 날짜) 기준 기간">
+      <option value="all">전체 기간</option>
+      <option value="this-year" selected>올해</option>
+      <option value="last-year">작년</option>
+      <option value="this-month">이번 달</option>
+      <option value="range">날짜 지정</option>
+    </select>
+    <input type="date" id="date-from"> ~ <input type="date" id="date-to">
+    <input type="search" id="search" placeholder="제목·언론사 찾기" style="width:180px">
+    <button id="btn-refresh" title="기사 DB를 다시 읽기">새로 고침</button>
+    <button id="btn-xlsx" title="특별보도마다 묶인 기사 전체 + 구분별 건수">📥 특별보도 엑셀</button>
+    <a class="button" href="/analysis" target="_blank">DB 분석</a>
+  </div>
+</header>
+
+<main>
+  <div id="messages"></div>
+  <section class="cards" id="cards"></section>
+  <div class="unlinked-note" id="pending-note"></div>
+
+  <div class="tabs">
+    <button class="active" data-tab="pending">묶기 대기 <span id="pending-count"></span></button>
+    <button data-tab="groups">등록된 특별보도 <span id="group-count"></span></button>
+  </div>
+
+  <section class="panel" data-pane="pending">
+    <h2>아직 묶지 않은 [특별보도] 기사 <small>같은 언론사 + 같은 날짜끼리 자동으로 묶어 보여 줍니다 (지면은 온라인 다음 날로 보고 맞춤)</small></h2>
+    <p class="muted small" style="margin:-4px 0 12px">구분과 이름을 확인하고 [한 건으로 등록]을 누르세요. 다른 기사가 섞였으면 체크를 풀고 등록하면 남은 기사는 그대로 대기합니다.
+      같은 특별보도가 따로 나뉘어 보이면 하나를 먼저 등록한 뒤, 다른 쪽에서 "기존 특별보도에 더하기"로 고르세요.</p>
+    <div id="pending"></div>
+  </section>
+
+  <section class="panel" data-pane="groups" style="display:none">
+    <h2>등록된 특별보도 <small id="groups-info"></small>
+      <select id="subtype-filter" style="margin-left:auto"><option value="">구분 전체</option></select></h2>
+    <div class="scroll" id="groups"></div>
+  </section>
+
+  <p class="muted small" style="margin:0">특별보도는 묶음 1개를 1건으로 셉니다 (온라인+지면, 여러 꼭지로 나뉜 기사도 1건). 기사 하나는 특별보도 하나에만 묶입니다.
+    묶음은 기사 DB 폴더의 <code>koita_special_연도.sqlite·csv·json</code>에 저장되고, 기사 DB는 바뀌지 않습니다.</p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let data = null;
+let tab = "pending";
+let openId = null;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+const fmt = (n) => Number(n).toLocaleString("ko-KR");
+const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.status === 401) { location.href = "/login"; throw new Error("로그인이 필요합니다."); }
+  if (!res.ok) throw new Error(await res.json().then(j => typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)).catch(() => res.statusText));
+  return res.json();
+}
+
+function message(html, kind = "notice") {
+  $("messages").insertAdjacentHTML("beforeend", `<div class="${kind}">${html}</div>`);
+}
+
+function applyPreset() {
+  const p = $("preset").value;
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  const set = (from, to) => { $("date-from").value = from; $("date-to").value = to; };
+  if (p === "all") set("", "");
+  else if (p === "this-year") set(`${y}-01-01`, `${y}-12-31`);
+  else if (p === "last-year") set(`${y - 1}-01-01`, `${y - 1}-12-31`);
+  else if (p === "this-month") set(iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)));
+}
+
+const typeBadge = (a) => `<span class="badge ${a.kind}">${esc(a.type)}</span>`;
+const urlLink = (a) => a.url && a.url.startsWith("http") ? ` <a class="ext" href="${esc(a.url)}" target="_blank" title="기사 열기">↗</a>` : "";
+const subBadge = (s) => `<span class="sub-badge ${esc(s)}">${esc(s)}</span>`;
+const countsText = (c) => `${fmt(c.total)}행 (온라인 ${c.online} · 지면 ${c.print}${c.broadcast ? ` · 방송 ${c.broadcast}` : ""})`;
+const subtypeOptions = (cur) => data.subtypes.map(s => `<option ${s === cur ? "selected" : ""}>${esc(s)}</option>`).join("");
+const matches = (text) => { const q = $("search").value.trim().toLowerCase(); return !q || text.toLowerCase().includes(q); };
+
+function query() {
+  const q = new URLSearchParams();
+  if ($("date-from").value) q.set("date_from", $("date-from").value);
+  if ($("date-to").value) q.set("date_to", $("date-to").value);
+  return q;
+}
+
+async function load() {
+  $("messages").innerHTML = "";
+  try {
+    data = await api(`/api/special?${query()}`);
+  } catch (err) {
+    message(esc(err.message), "error");
+    return;
+  }
+  for (const w of data.warnings) message(esc(w));
+  const s = data.summary;
+  const card = (label, num, sub) => `<div class="card"><div class="label">${label}</div><div class="num">${num}<small>건</small></div><div class="sub">${sub}</div></div>`;
+  $("cards").innerHTML = card("특별보도", fmt(s.total), `기사 ${countsText(s.rows)}`) +
+    data.subtypes.map(t => card(subBadge(t), fmt(s.by_subtype[t].count), `기사 ${fmt(s.by_subtype[t].rows.total)}행`)).join("");
+  $("pending-note").textContent = s.unassigned ? `*아직 묶지 않은 [특별보도] 기사가 ${fmt(s.unassigned)}건 있습니다. (아래 '묶기 대기'에서 묶기)` : "";
+  $("pending-count").textContent = data.proposals.length ? `(${data.proposals.length})` : "";
+  $("group-count").textContent = data.groups.length ? `(${data.groups.length})` : "";
+  if (!$("subtype-filter").options[1]) $("subtype-filter").insertAdjacentHTML("beforeend", data.subtypes.map(t => `<option>${esc(t)}</option>`).join(""));
+  renderPending();
+  renderGroups();
+}
+
+// ---------------- 묶기 대기 ----------------
+
+function renderPending() {
+  const list = data.proposals.map((p, i) => ({ p, i }))
+    .filter(({ p }) => matches(`${p.press} ${p.articles.map(a => a.title).join(" ")}`));
+  if (!list.length) { $("pending").innerHTML = `<div class="empty">묶을 [특별보도] 기사가 없습니다. 기사 DB에서 분류를 [특별보도]로 고르면 여기에 나옵니다.</div>`; return; }
+  $("pending").innerHTML = list.map(({ p, i }) => {
+    const same = data.groups.filter(g => g.press.split(", ").includes(p.press));
+    return `<div class="prop" data-prop="${i}">
+      <div class="head"><b>${esc(p.press)}</b><span class="muted">${esc(p.date)}</span><span class="muted small">${countsText(p.counts)}</span></div>
+      <div class="head">
+        <select data-target title="새 특별보도로 등록하거나, 이미 등록한 같은 언론사 특별보도에 더하기">
+          <option value="">새 특별보도로</option>
+          ${same.map(g => `<option value="${esc(g.id)}">기존 특별보도에 더하기: ${esc(g.date)} [${esc(g.subtype)}] ${esc(g.title)}</option>`).join("")}
+        </select>
+        <select data-subtype title="구분">${subtypeOptions(p.subtype)}</select>
+        <input class="title" data-title value="${esc(p.title)}" title="특별보도 이름 (기본: 온라인 기사 제목)">
+        <button class="primary" data-register>한 건으로 등록</button>
+      </div>
+      <table><thead><tr><th class="check"><input type="checkbox" data-all checked></th><th>날짜</th><th>제목</th></tr></thead><tbody>
+      ${p.articles.map(a => `<tr><td class="check"><input type="checkbox" data-key="${esc(a.key)}" checked></td>
+        <td class="nowrap">${esc(a.date)}</td><td>${typeBadge(a)} ${esc(a.title)}${urlLink(a)}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  }).join("");
+}
+
+$("pending").addEventListener("change", (e) => {
+  const box = e.target.closest(".prop");
+  if (!box) return;
+  if (e.target.matches("[data-all]")) box.querySelectorAll("[data-key]").forEach(c => c.checked = e.target.checked);
+  if (e.target.matches("[data-target]")) {
+    const isNew = !e.target.value;
+    box.querySelector("[data-subtype]").disabled = !isNew;
+    box.querySelector("[data-title]").disabled = !isNew;
+  }
+});
+
+$("pending").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-register]");
+  if (!btn) return;
+  const box = btn.closest(".prop");
+  const keys = [...box.querySelectorAll("[data-key]:checked")].map(c => c.dataset.key);
+  if (!keys.length) { alert("묶을 기사를 체크하세요."); return; }
+  const target = box.querySelector("[data-target]").value;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/special/group", target ? { keys, group_id: target } :
+      { keys, subtype: box.querySelector("[data-subtype]").value, title: box.querySelector("[data-title]").value });
+    await load();
+    message(`${r.linked}행을 특별보도 1건으로 ${target ? "더했습니다" : "등록했습니다"}.`, "ok");
+    r.warnings.forEach(w => message(esc(w)));
+  } catch (err) {
+    btn.disabled = false;
+    message(esc(err.message), "error");
+  }
+});
+
+// ---------------- 등록된 특별보도 ----------------
+
+function renderGroups() {
+  const sub = $("subtype-filter").value;
+  const list = data.groups.filter(g => (!sub || g.subtype === sub) && matches(`${g.title} ${g.press} ${g.articles.map(a => a.title).join(" ")}`));
+  $("groups-info").textContent = `${list.length}건`;
+  if (!list.length) { $("groups").innerHTML = `<div class="empty">이 기간에 등록한 특별보도가 없습니다.</div>`; return; }
+  $("groups").innerHTML = `<table><thead><tr><th>날짜</th><th>구분</th><th>언론사</th><th>특별보도명</th>
+    <th class="num">기사 행</th><th class="num">온라인</th><th class="num">지면</th><th class="num">방송</th></tr></thead><tbody>` +
+    list.map(g => `<tr class="g ${g.id === openId ? "open" : ""}" data-id="${esc(g.id)}">
+      <td class="nowrap">${esc(g.date)}</td><td>${subBadge(g.subtype)}</td><td class="nowrap">${esc(g.press)}</td>
+      <td>${esc(g.title)}${g.missing_articles.length ? ` <span class="badge warn">DB에서 사라진 기사 ${g.missing_articles.length}</span>` : ""}
+        ${g.not_special ? ` <span class="badge warn" title="분류가 [특별보도]가 아닌 기사가 묶여 있음">분류 다름 ${g.not_special}</span>` : ""}</td>
+      <td class="num"><b>${g.counts.total}</b></td><td class="num">${g.counts.online}</td><td class="num">${g.counts.print}</td><td class="num">${g.counts.broadcast}</td></tr>` +
+      (g.id === openId ? `<tr class="detail"><td colspan="8">${detailHtml(g)}</td></tr>` : "")).join("") + `</tbody></table>`;
+}
+
+function detailHtml(g) {
+  const rows = g.articles.map(a => `<tr><td class="check"><input type="checkbox" data-key="${esc(a.key)}"></td>
+      <td class="nowrap">${esc(a.date)}</td><td class="nowrap">${esc(a.press)}</td><td>${typeBadge(a)} ${esc(a.title)}${urlLink(a)}</td></tr>`).join("") +
+    g.missing_articles.map(a => `<tr><td class="check"><input type="checkbox" data-key="${esc(a.article_key)}"></td>
+      <td class="nowrap">${esc(a.article_date)}</td><td class="nowrap">${esc(a.press)}</td><td><span class="badge warn">DB에서 사라짐</span> ${esc(a.title)}</td></tr>`).join("");
+  return `<div class="detail" data-group="${esc(g.id)}">
+    <div class="head">
+      <select data-subtype>${subtypeOptions(g.subtype)}</select>
+      <input class="title" data-title value="${esc(g.title)}">
+      <button data-save>구분·이름 저장</button>
+      <button class="danger" data-ungroup title="이 특별보도를 풀어 기사들을 다시 '묶기 대기'로">묶음 풀기</button>
+    </div>
+    <table><thead><tr><th class="check"></th><th>날짜</th><th>언론사</th><th>제목</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="row" style="margin-top:8px"><button data-remove>체크한 기사 빼기</button></div></div>`;
+}
+
+$("groups").addEventListener("click", async (e) => {
+  const tr = e.target.closest("tr.g");
+  if (tr && !e.target.closest("a")) { openId = openId === tr.dataset.id ? null : tr.dataset.id; renderGroups(); return; }
+  const box = e.target.closest(".detail[data-group]");
+  if (!box) return;
+  const id = box.dataset.group;
+  try {
+    let r = null;
+    if (e.target.matches("[data-save]")) {
+      r = await api("/api/special/update", { group_id: id, subtype: box.querySelector("[data-subtype]").value, title: box.querySelector("[data-title]").value });
+      await load(); message("구분·이름을 저장했습니다.", "ok");
+    } else if (e.target.matches("[data-ungroup]")) {
+      if (!confirm("이 특별보도의 묶음을 풀까요? 기사는 기사 DB에 그대로 있고 '묶기 대기'로 돌아갑니다.")) return;
+      r = await api("/api/special/unlink", { group_id: id });
+      openId = null; await load(); message(`묶음을 풀었습니다 (${r.unlinked}행).`, "ok");
+    } else if (e.target.matches("[data-remove]")) {
+      const keys = [...box.querySelectorAll("[data-key]:checked")].map(c => c.dataset.key);
+      if (!keys.length) { alert("뺄 기사를 체크하세요."); return; }
+      r = await api("/api/special/unlink", { keys });
+      await load(); message(`${r.unlinked}행을 묶음에서 뺐습니다.`, "ok");
+    }
+    (r?.warnings || []).forEach(w => message(esc(w)));
+  } catch (err) { message(esc(err.message), "error"); }
+});
+
+// ---------------- 공통 ----------------
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll("[data-pane]").forEach(p => p.style.display = p.dataset.pane === tab ? "" : "none");
+}));
+$("preset").addEventListener("change", () => { applyPreset(); load(); });
+for (const id of ["date-from", "date-to"]) $(id).addEventListener("change", () => { $("preset").value = "range"; load(); });
+$("search").addEventListener("input", () => { if (data) { renderPending(); renderGroups(); } });
+$("subtype-filter").addEventListener("change", renderGroups);
+$("btn-refresh").addEventListener("click", load);
+$("btn-xlsx").addEventListener("click", () => { location.href = `/api/special/export?${query()}`; });
+
+applyPreset();
+load();
+function keepAlive(info) {
+  if (!info || !info.window_mode || !window.EventSource) return;
+  new EventSource("/api/alive");
+  const banner = () => document.getElementById("offline-banner") || document.body.insertAdjacentElement("afterbegin",
+    Object.assign(document.createElement("div"), { id: "offline-banner",
+      style: "position:fixed;top:0;left:0;right:0;z-index:99;background:#b91c1c;color:#fff;padding:10px 16px;text-align:center;font-weight:600",
+      textContent: "프로그램이 꺼졌습니다. GoodMorningKOITA.vbs를 다시 실행한 뒤 이 탭을 새로 고침(F5)하세요." }));
+  let misses = 0;
+  setInterval(() => {
+    fetch("/healthz", { cache: "no-store" })
+      .then(r => { if (!r.ok) throw 0; misses = 0; document.getElementById("offline-banner")?.remove(); })
+      .catch(() => { if (++misses >= 2) banner(); });
+  }, 10000);
+}
+api("/api/status").then(info => { keepAlive(info); $("version").textContent = `v${info.version}`; }).catch(() => {});
+</script>
+</body>
+</html>

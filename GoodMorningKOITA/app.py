@@ -28,6 +28,7 @@ import db  # noqa: E402
 import exporter  # noqa: E402
 import printcheck  # noqa: E402
 import pressrelease  # noqa: E402
+import special  # noqa: E402
 import stats  # noqa: E402
 
 # 첫 화면을 여러 번 새로고침해도 API를 매번 부르지 않도록 하는 최소 간격
@@ -105,6 +106,7 @@ def archive_stats(date_from: str | None = None, date_to: str | None = None):
     result = stats.summarize(rows, date_from or None, date_to or None)
     with archive_lock:  # 연결표 키를 고쳐 저장할 수도 있어서
         result["press_releases"] = pressrelease.stats_section(date_from or None, date_to or None, rows)
+        result["special"] = special.stats_section(date_from or None, date_to or None, rows)
     return result
 
 
@@ -233,6 +235,87 @@ def press_release_open(body: PressReleaseQuery, request: Request):
         raise HTTPException(400, "PC에서 바로 열기는 윈도우 PC에서만 됩니다. 내려받기로 여세요.")
     os.startfile(path)  # noqa: S606 (보도자료 폴더 안 파일만)
     return {"ok": True}
+
+
+# ---------------- 특별보도 묶음 (v1.5.0) ----------------
+
+@app.get("/special")
+def special_page():
+    """특별보도 창: [특별보도] 분류 기사를 기고·인터뷰·기획보도 1건씩으로 묶는다"""
+    return FileResponse(BASE_DIR / "static" / "special.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/special")
+def special_overview(date_from: str | None = None, date_to: str | None = None):
+    """등록한 특별보도(묶음)·구분별 건수 + 아직 안 묶은 [특별보도] 기사의 자동 묶음 제안"""
+    with archive_lock:
+        return special.overview(None, date_from or None, date_to or None)
+
+
+class SpecialGroup(BaseModel):
+    keys: list[str]                 # 기사 DB 행 키 (제안·목록의 key)
+    subtype: str | None = None      # 기고·인터뷰·기획보도 (새로 묶을 때)
+    title: str | None = None        # 특별보도 이름 (비우면 온라인 기사 제목)
+    group_id: str | None = None     # 주면 그 특별보도에 더한다
+
+
+@app.post("/api/special/group")
+def special_group(body: SpecialGroup):
+    """체크한 기사들을 특별보도 1건으로 묶는다 (또는 기존 특별보도에 더한다)"""
+    with archive_lock:
+        try:
+            return special.group(body.keys, body.subtype, body.title, body.group_id)
+        except special.SpecialError as exc:
+            raise HTTPException(409, str(exc))
+
+
+class SpecialUpdate(BaseModel):
+    group_id: str
+    subtype: str | None = None
+    title: str | None = None
+
+
+@app.post("/api/special/update")
+def special_update(body: SpecialUpdate):
+    with archive_lock:
+        try:
+            return special.update(body.group_id, body.subtype, body.title)
+        except special.SpecialError as exc:
+            raise HTTPException(400, str(exc))
+
+
+class SpecialUnlink(BaseModel):
+    keys: list[str] | None = None
+    group_id: str | None = None     # 주면 그 특별보도를 통째로 푼다
+
+
+@app.post("/api/special/unlink")
+def special_unlink(body: SpecialUnlink):
+    with archive_lock:
+        try:
+            return special.unlink(body.keys, body.group_id)
+        except special.SpecialError as exc:
+            raise HTTPException(400, str(exc))
+
+
+@app.get("/api/special/export")
+def special_export(date_from: str | None = None, date_to: str | None = None):
+    """특별보도 엑셀 (특별보도마다 묶인 기사 전체 + 구분별 건수 시트)"""
+    with archive_lock:
+        data = special.overview(None, date_from or None, date_to or None)
+    return xlsx_response(None, exporter.build_special(data["groups"]), "특별보도")
+
+
+class DbRows(BaseModel):
+    rows: list[dict]
+
+
+@app.post("/api/archive/export")
+def archive_export(body: DbRows):
+    """DB 편집 창의 행(체크한 행 또는 전체)을 엑셀로. 편집 중인 값 그대로"""
+    if not body.rows:
+        raise HTTPException(400, "내려받을 행이 없습니다.")
+    return xlsx_response(None, exporter.build_db_rows(body.rows), "기사DB")
 
 
 @app.get("/editor")

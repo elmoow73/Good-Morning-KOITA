@@ -52,6 +52,12 @@
   .bar .online { background: var(--online); } .bar .print { background: var(--print); } .bar .broadcast { background: var(--broadcast); }
   tr.zero td { color: #b6bcc6; }
   #by-release td:first-child { white-space: normal; min-width: 240px; }
+  #sp-list td.t { white-space: normal; text-align: left; min-width: 240px; }
+  #sp-list td.l { text-align: left; }
+  .sub-badge { display: inline-block; font-size: 12px; border-radius: 4px; padding: 0 8px; font-weight: 600; }
+  .sub-badge.기고 { background: #ede9fe; color: #6d28d9; }
+  .sub-badge.인터뷰 { background: #e0f2fe; color: #0369a1; }
+  .sub-badge.기획보도 { background: #fef3c7; color: #b45309; }
   .scroll { max-height: 480px; overflow: auto; }
   .scroll thead th { position: sticky; top: 0; background: var(--panel); }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -119,6 +125,18 @@
     <div class="cards three" id="pr-cards" style="margin-bottom:12px"></div>
     <div class="unlinked-note" id="pr-unlinked"></div>
     <div id="by-release" class="scroll"></div>
+  </section>
+
+  <section class="panel">
+    <h2>특별보도 <small id="sp-info"></small>
+      <a href="/special" target="_blank" style="font-size:12px; font-weight:400; margin-left:auto">특별보도 창에서 묶기 ↗</a></h2>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btn-xlsx-special" title="특별보도마다 묶인 기사 전체 + 구분별 건수">📥 특별보도 엑셀</button>
+      <select id="sp-filter" title="구분으로 골라 보기"><option value="">구분 전체</option></select>
+    </div>
+    <div class="cards" id="sp-cards" style="margin-bottom:12px"></div>
+    <div class="unlinked-note" id="sp-unassigned"></div>
+    <div id="sp-list" class="scroll"></div>
   </section>
 
   <p class="muted" style="font-size:12px; margin:0">건수는 DB 행 수 기준입니다. 같은 기사가 온라인과 지면(또는 방송)으로 모두 있으면 각각 1건으로 셉니다. 기간은 DB의 '날짜' 열 기준입니다.</p>
@@ -222,6 +240,27 @@ function renderReleases(pr) {
   $("by-release").innerHTML = table(items, "보도자료 (배포일 · 보도자료명)", "이 기간에 배포한 보도자료가 없습니다.");
 }
 
+// 특별보도: 묶음 1개 = 1건. 기고·인터뷰·기획보도 건수와 목록
+let special = null;
+function renderSpecial(sp) {
+  special = sp || special;
+  if (!special) { $("sp-list").innerHTML = ""; return; }
+  const m = special.summary;
+  if (!$("sp-filter").options[1]) $("sp-filter").insertAdjacentHTML("beforeend", special.subtypes.map(t => `<option>${esc(t)}</option>`).join(""));
+  $("sp-info").textContent = `묶음 1개 = 1건 · 특별보도 날짜(첫 기사 날짜) 기준`;
+  const card = (label, num, sub) => `<div class="card"><div class="label">${label}</div><div class="num">${num}<small>건</small></div><div class="pct">${sub}</div></div>`;
+  $("sp-cards").innerHTML = card("특별보도", fmt(m.total), `기사 ${fmt(m.rows.total)}행 (온라인 ${fmt(m.rows.online)} · 지면 ${fmt(m.rows.print)} · 방송 ${fmt(m.rows.broadcast)})`) +
+    special.subtypes.map(t => card(`<span class="sub-badge ${esc(t)}">${esc(t)}</span>`, fmt(m.by_subtype[t].count), `기사 ${fmt(m.by_subtype[t].rows.total)}행`)).join("");
+  $("sp-unassigned").textContent = m.unassigned ? `*아직 특별보도로 묶지 않은 [특별보도] 기사가 ${fmt(m.unassigned)}건 있습니다.` : "";
+  const f = $("sp-filter").value;
+  const list = special.groups.filter(g => !f || g.subtype === f);
+  $("sp-list").innerHTML = list.length ? `<table><thead><tr><th>날짜</th><th style="text-align:left">구분</th><th style="text-align:left">언론사</th>
+    <th style="text-align:left">특별보도명</th><th>기사 행</th><th>온라인</th><th>지면</th><th>방송</th></tr></thead><tbody>` +
+    list.map(g => `<tr><td>${esc(g.date)}</td><td class="l"><span class="sub-badge ${esc(g.subtype)}">${esc(g.subtype)}</span></td>
+      <td class="l">${esc(g.press)}</td><td class="t">${esc(g.title)}</td><td><b>${g.total}</b></td><td>${g.online}</td><td>${g.print}</td><td>${g.broadcast}</td></tr>`).join("") +
+    `</tbody></table>` : `<div class="empty">이 기간에 등록한 특별보도가 없습니다.</div>`;
+}
+
 async function load() {
   const q = new URLSearchParams();
   if ($("date-from").value) q.set("date_from", $("date-from").value);
@@ -246,6 +285,7 @@ async function load() {
     $("by-press").innerHTML = table(s.by_press, "언론사", "기사가 없습니다.");
     $("press-count").textContent = s.by_press.length ? `${s.by_press.length}곳` : "";
     renderReleases(s.press_releases);
+    renderSpecial(s.special);
   } catch (err) {
     $("error").innerHTML = `<div class="error">${esc(err.message)}</div>`;
   }
@@ -260,6 +300,11 @@ $("btn-refresh").addEventListener("click", load);
 const periodBody = () => ({ date_from: $("date-from").value || null, date_to: $("date-to").value || null });
 $("btn-xlsx-summary").addEventListener("click", (e) => downloadReleaseXlsx("summary", periodBody(), e.currentTarget));
 $("btn-xlsx-articles").addEventListener("click", (e) => downloadReleaseXlsx("articles", periodBody(), e.currentTarget));
+$("sp-filter").addEventListener("change", () => renderSpecial());
+$("btn-xlsx-special").addEventListener("click", () => {
+  const q = new URLSearchParams(Object.entries(periodBody()).filter(([, v]) => v));
+  location.href = `/api/special/export?${q}`;
+});
 
 applyPreset();
 load();

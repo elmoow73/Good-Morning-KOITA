@@ -123,7 +123,13 @@
     <option value="">구분 전체</option><option value="print">지면만</option>
     <option value="온라인">온라인만</option><option value="방송">방송만</option>
   </select>
+  <select id="category-filter" class="tool" title="분류로 골라 보기">
+    <option value="">분류 전체</option>
+  </select>
   <input type="text" id="filter" placeholder="표에서 찾기" style="width:160px">
+  <span class="sep"></span>
+  <button id="btn-xlsx-picked" title="왼쪽 칸을 체크한 행만 엑셀로 (저장 안 한 수정도 지금 표의 값 그대로)">📥 체크한 행 엑셀</button>
+  <button id="btn-xlsx-all" title="지금 연도 DB의 전체 행을 엑셀로 (저장 안 한 수정도 지금 표의 값 그대로)">📥 전체 엑셀</button>
   <span id="info" class="muted"></span>
 </header>
 
@@ -244,6 +250,7 @@ function load(data) {
   $("year").title = `지금 고치는 파일: ${data.file}. 기사 '날짜' 열의 연도로 DB가 나뉩니다`;
   categories = data.categories;
   fillBulkCategory();
+  fillCategoryFilter();
   rows = data.rows.map(r => ({ _id: nextId++, seq: r.seq, orig: { ...r }, cur: { ...r }, deleted: false, isNew: false }));
   problems.clear();
   render();
@@ -273,7 +280,9 @@ $("year").addEventListener("change", async (e) => {
 function visibleRows() {
   const term = $("filter").value.trim().toLowerCase();
   const type = $("type-filter").value;
+  const cat = $("category-filter").value;
   let list = rows.filter(r =>
+    (!cat || (cat === "__none" ? !r.cur.category : r.cur.category === cat)) &&
     (!term || EDITABLE.some(n => String(r.cur[n] ?? "").toLowerCase().includes(term)) || String(r.seq).includes(term)) &&
     (!type || (type === "print" ? isPrint(r.cur.type) : r.cur.type === type)));
   if (sortBy) {
@@ -464,6 +473,7 @@ $("btn-add").addEventListener("click", () => {
   sortBy = null;
   $("filter").value = "";
   $("type-filter").value = "";
+  $("category-filter").value = "";
   render();
   focusCell($("body").querySelector(`tr[data-id="${r._id}"]`), 3);
 });
@@ -481,6 +491,13 @@ $("btn-delete").addEventListener("click", () => {
 });
 
 // 체크한 행 분류 한 번에 바꾸기
+function fillCategoryFilter() {
+  const cur = $("category-filter").value;
+  $("category-filter").innerHTML = `<option value="">분류 전체</option>` +
+    categories.map(c => `<option value="${esc(c)}">${esc(c)}만</option>`).join("") + `<option value="__none">분류 없음(선택)만</option>`;
+  $("category-filter").value = [...$("category-filter").options].some(o => o.value === cur) ? cur : "";
+}
+
 function fillBulkCategory() {
   $("bulk-category").innerHTML = `<option value="" disabled selected>체크한 행 분류</option>` +
     categories.map(c => `<option>${esc(c)}</option>`).join("") + `<option value="__clear">선택(빈 값)으로</option>`;
@@ -506,6 +523,38 @@ $("btn-undo").addEventListener("click", () => {
 $("btn-reload").addEventListener("click", () => reload(true));
 $("filter").addEventListener("input", render);
 $("type-filter").addEventListener("change", render);
+$("category-filter").addEventListener("change", render);
+
+// ---------------- 엑셀로 내려받기 (체크한 행 / 전체) ----------------
+
+async function downloadXlsx(list, button) {
+  if (!list.length) { alert("내려받을 행이 없습니다. 왼쪽 칸을 먼저 체크하세요."); return; }
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/archive/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: list.map(r => ({ ...r.cur, seq: r.seq })) }) });
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) throw new Error(await res.json().then(j => j.detail).catch(() => res.statusText));
+    const cd = res.headers.get("Content-Disposition") || "";
+    const name = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/) || [])[1] || "기사DB.xlsx");
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) {
+    message("error", `엑셀을 만들지 못했습니다: ${esc(err.message)}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+// 체크한 행은 지금 표의 정렬·골라 보기 순서대로, 전체는 연도 DB 전체 (삭제 표시한 행은 뺌)
+$("btn-xlsx-picked").addEventListener("click", (e) => {
+  const shown = visibleRows().filter(r => r.picked && !r.deleted);
+  const hidden = rows.filter(r => r.picked && !r.deleted && !shown.includes(r));
+  downloadXlsx([...shown, ...hidden], e.currentTarget);
+});
+$("btn-xlsx-all").addEventListener("click", (e) => downloadXlsx(rows.filter(r => !r.deleted), e.currentTarget));
 
 // ---------------- 저장 ----------------
 
@@ -551,7 +600,7 @@ $("btn-save").addEventListener("click", save);
 function gotoCell(id, field) {
   let tr = $("body").querySelector(`tr[data-id="${id}"]`);
   if (!tr) {  // 골라 보기에 가려져 있으면 풀고 다시
-    $("filter").value = ""; $("type-filter").value = ""; render();
+    $("filter").value = ""; $("type-filter").value = ""; $("category-filter").value = ""; render();
     tr = $("body").querySelector(`tr[data-id="${id}"]`);
   }
   if (!tr) return;

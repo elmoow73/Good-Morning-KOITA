@@ -47,13 +47,14 @@ python3 - "$KOITA_DATA" "$snap" <<'PY'
 import pathlib, shutil, sqlite3, sys
 src, dst = map(pathlib.Path, sys.argv[1:])
 archive = src / "database"
-for db in [src / "news.db", *sorted(archive.glob("koita_news*.sqlite")), *sorted(archive.glob("koita_pressrelease*.sqlite"))]:  # 연도별 DB(koita_news_2026 …) 모두
+for db in [src / "news.db", *sorted(archive.glob("koita_news*.sqlite")), *sorted(archive.glob("koita_pressrelease*.sqlite")), *sorted(archive.glob("koita_special*.sqlite"))]:  # 연도별 DB(koita_news_2026 …) 모두
     if db.exists():
         s, d = sqlite3.connect(f"file:{db}?mode=ro", uri=True), sqlite3.connect(dst / db.name)
         s.backup(d)
         s.close(); d.close()
 for f in [*archive.glob("koita_news*.csv"), *archive.glob("koita_news*.json"),
-          *archive.glob("koita_pressrelease*.csv"), *archive.glob("koita_pressrelease*.json")]:  # 보도자료 연결표 (v1.5.0~)
+          *archive.glob("koita_pressrelease*.csv"), *archive.glob("koita_pressrelease*.json"),
+          *archive.glob("koita_special*.csv"), *archive.glob("koita_special*.json")]:  # 보도자료·특별보도 연결표 (v1.5.0~)
     shutil.copy2(f, dst / f.name)
 PY
 

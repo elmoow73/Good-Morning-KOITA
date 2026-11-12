@@ -23,6 +23,15 @@ GoodMorningKOITA 명령줄 실행 (화면 없이, AI 에이전트·예약 작업
       연결 끊기
   python cli.py press-release-export --what summary|articles --out 파일.xlsx [--folder 폴더] [--from ...] [--to ...]
       보도자료 엑셀 저장. summary = 보도자료 목록+보도건수(총·온라인·지면·방송), articles = 보도자료에 연결된 기사 전체
+  python cli.py special [--from 2026-01-01] [--to 2026-12-31]
+      특별보도(묶음 1개 = 1건) 목록·구분별(기고·인터뷰·기획보도) 건수 + 아직 안 묶은 [특별보도] 기사의 자동 묶음 제안(proposals)
+      종료 코드 1 = 안 묶은 [특별보도] 기사가 있음
+  python cli.py special-group --key 기사키 [--key ...] (--subtype 기고|인터뷰|기획보도 [--title 이름] | --group 특별보도ID)
+      기사들을 특별보도 1건으로 묶기 (--group: 기존 특별보도에 더하기)
+  python cli.py special-unlink (--key 기사키 [--key ...] | --group 특별보도ID)
+      묶음에서 기사 빼기 / 특별보도 통째로 풀기
+  python cli.py special-export --out 파일.xlsx [--from ...] [--to ...]
+      특별보도 엑셀 저장 (특별보도마다 묶인 기사 전체 + 구분별 건수 시트)
 """
 
 import argparse
@@ -37,6 +46,7 @@ load_dotenv(Path(__file__).parent / ".env")
 import archive  # noqa: E402
 import pressrelease  # noqa: E402
 import printcheck  # noqa: E402
+import special  # noqa: E402
 import stats  # noqa: E402
 
 
@@ -147,6 +157,34 @@ def press_release_export_cmd(args):
                 "linked": data["summary"]["linked"]}, 0)
 
 
+def special_cmd(args):
+    data = special.overview(None, args.date_from, args.date_to)
+    data["ok"] = not data["summary"]["unassigned"]
+    return out(data, 0 if data["ok"] else 1)
+
+
+def special_group_cmd(args):
+    try:
+        return out({"ok": True} | special.group(args.key, args.subtype, args.title, args.group), 0)
+    except special.SpecialError as exc:
+        return out({"ok": False, "error": str(exc)}, 1)
+
+
+def special_unlink_cmd(args):
+    try:
+        return out({"ok": True} | special.unlink(args.key, args.group), 0)
+    except special.SpecialError as exc:
+        return out({"ok": False, "error": str(exc)}, 1)
+
+
+def special_export_cmd(args):
+    import exporter
+    data = special.overview(None, args.date_from, args.date_to)
+    path = Path(args.out).resolve()
+    path.write_bytes(exporter.build_special(data["groups"]))
+    return out({"ok": True, "file": str(path), "groups": len(data["groups"]), "summary": data["summary"]}, 0)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="GoodMorningKOITA 명령줄 실행 (JSON 출력)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -188,6 +226,25 @@ def main(argv=None):
     p.add_argument("--from", dest="date_from", help="배포일 시작 YYYY-MM-DD (포함)")
     p.add_argument("--to", dest="date_to", help="배포일 끝 YYYY-MM-DD (포함)")
     p.set_defaults(run=press_release_export_cmd)
+    p = sub.add_parser("special", help="특별보도 목록·구분별 건수·묶음 제안")
+    p.add_argument("--from", dest="date_from", help="시작 날짜 YYYY-MM-DD (포함)")
+    p.add_argument("--to", dest="date_to", help="끝 날짜 YYYY-MM-DD (포함)")
+    p.set_defaults(run=special_cmd)
+    p = sub.add_parser("special-group", help="기사를 특별보도 1건으로 묶기")
+    p.add_argument("--key", action="append", required=True, help="기사키 (여러 번 가능)")
+    p.add_argument("--subtype", choices=special.SUBTYPES, help="구분 (새로 묶을 때)")
+    p.add_argument("--title", help="특별보도 이름 (비우면 온라인 기사 제목)")
+    p.add_argument("--group", help="기존 특별보도ID에 더하기")
+    p.set_defaults(run=special_group_cmd)
+    p = sub.add_parser("special-unlink", help="특별보도 묶음에서 빼기·풀기")
+    p.add_argument("--key", action="append", help="기사키 (여러 번 가능)")
+    p.add_argument("--group", help="이 특별보도ID를 통째로 풀기")
+    p.set_defaults(run=special_unlink_cmd)
+    p = sub.add_parser("special-export", help="특별보도 엑셀 저장")
+    p.add_argument("--out", required=True, help="저장할 엑셀 파일 경로 (.xlsx)")
+    p.add_argument("--from", dest="date_from", help="시작 날짜 YYYY-MM-DD (포함)")
+    p.add_argument("--to", dest="date_to", help="끝 날짜 YYYY-MM-DD (포함)")
+    p.set_defaults(run=special_export_cmd)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

@@ -101,8 +101,8 @@ def build_workbook(articles):
 
 RELEASE_COLUMNS = ["배포일", "보도자료명", "총", "온라인", "지면", "방송"]
 RELEASE_WIDTHS = [13, 70, 8, 8, 8, 8]
-ARTICLE_COLUMNS = ["날짜", "언론사", "제목", "URL"]
-ARTICLE_WIDTHS = [13, 28, 70, 50]
+ARTICLE_COLUMNS = ["날짜", "언론사", "구분", "제목", "URL"]
+ARTICLE_WIDTHS = [13, 18, 12, 70, 50]
 HEADER_FILL = PatternFill("solid", fgColor="E8EEFC")
 THIN = Side(style="thin", color="D0D5DD")
 GROUP_TOP = Border(top=THIN)
@@ -163,33 +163,99 @@ def build_release_summary(releases):
 def build_release_articles(releases):
     """
     엑셀 2: 보도자료에 연결된 기사 전체. 보도자료 1건의 기사 수만큼 줄을 쓰고,
-    왼쪽 보도자료 칸(배포일·보도자료명·건수)은 그 줄들을 세로로 합친다. 오른쪽에 기사 날짜·언론사(언론사명 구분)·제목·URL.
+    왼쪽 보도자료 칸(배포일·보도자료명·건수)은 그 줄들을 세로로 합친다. 오른쪽에 기사 날짜·언론사·구분·제목·URL.
     URL이 http로 시작하면(온라인·방송) 누르면 열리는 링크. 연결된 기사가 없는 보도자료도 한 줄로 남긴다
+    """
+    return grouped_articles_workbook("보도자료별 연결 기사", RELEASE_COLUMNS, RELEASE_WIDTHS[:2] + [6, 6, 6, 6],
+                                     [(release_values(r), r["articles"]) for r in releases], text_col=2)
+
+
+def grouped_articles_workbook(title, left_columns, left_widths, groups, text_col):
+    """
+    groups: [(왼쪽 칸 값들, 기사 목록)]. 기사 수만큼 줄을 쓰고 왼쪽 칸은 세로로 합친다.
+    오른쪽 기사 칸: 날짜·언론사·구분·제목·URL (URL이 http면 링크). text_col: 왼쪽에서 왼쪽 정렬·줄바꿈할 열 번호(1부터)
     """
     wb = Workbook()
     ws = wb.active
-    ws.title = "보도자료별 연결 기사"
-    ws.append(RELEASE_COLUMNS + ARTICLE_COLUMNS)
-    for r in releases:
+    ws.title = title
+    ws.append(left_columns + ARTICLE_COLUMNS)
+    n = len(left_columns)
+    for left_values, group_articles in groups:
         start = ws.max_row + 1
-        articles = r["articles"] or [None]
-        for a in articles:
-            left = release_values(r) if a is articles[0] else [None] * len(RELEASE_COLUMNS)
-            right = [a["date"], f"{a['press']} {a['type']}".strip(), a["title"], a["url"]] if a else [None] * 4
+        articles = group_articles or [None]
+        for i, a in enumerate(articles):
+            left = left_values if i == 0 else [None] * n
+            right = [a["date"], a["press"], a["type"], a["title"], a["url"]] if a else [None] * len(ARTICLE_COLUMNS)
             ws.append(left + right)
-            url_cell = ws.cell(ws.max_row, len(RELEASE_COLUMNS) + 4)
+            url_cell = ws.cell(ws.max_row, n + len(ARTICLE_COLUMNS))
             if isinstance(url_cell.value, str) and url_cell.value.startswith(("http://", "https://")):
                 url_cell.hyperlink = url_cell.value
                 url_cell.style = "Hyperlink"
         end = ws.max_row
-        for col in range(1, len(RELEASE_COLUMNS) + 1):
+        for col in range(1, n + 1):
             if end > start:
                 ws.merge_cells(start_row=start, end_row=end, start_column=col, end_column=col)
             ws.cell(start, col).alignment = Alignment(
-                horizontal="left" if col == 2 else "center", vertical="center", wrap_text=col == 2)
-        for col in range(1, len(RELEASE_COLUMNS) + len(ARTICLE_COLUMNS) + 1):
+                horizontal="left" if col == text_col else "center", vertical="center", wrap_text=col == text_col)
+        for col in range(1, n + len(ARTICLE_COLUMNS) + 1):
             ws.cell(start, col).border = GROUP_TOP
-    style_header(ws, RELEASE_WIDTHS[:2] + [6, 6, 6, 6] + ARTICLE_WIDTHS)
-    for row in ws.iter_rows(min_row=2, min_col=7, max_col=7):
-        row[0].alignment = Alignment(horizontal="center", vertical="center")
+    style_header(ws, left_widths + ARTICLE_WIDTHS)
+    for row in ws.iter_rows(min_row=2, min_col=n + 1, max_col=n + 3):
+        for cell in row:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+    return to_bytes(wb)
+
+
+# ---------------- 특별보도 엑셀 (v1.5.0) ----------------
+
+SPECIAL_COLUMNS = ["날짜", "구분", "특별보도명", "기사 행", "온라인", "지면", "방송"]
+SPECIAL_WIDTHS = [13, 10, 60, 8, 7, 7, 7]
+
+
+def build_special(groups):
+    """특별보도 묶음 1건마다 묶인 기사 전체 (특별보도 칸은 세로로 합침). 맨 아래 구분별 건수는 별도 시트"""
+    data = grouped_articles_workbook(
+        "특별보도", SPECIAL_COLUMNS, SPECIAL_WIDTHS,
+        [([g["date"], g["subtype"], g["title"], g["counts"]["total"], g["counts"]["online"],
+           g["counts"]["print"], g["counts"]["broadcast"]], g["articles"]) for g in groups], text_col=3)
+    from openpyxl import load_workbook
+    wb = load_workbook(BytesIO(data))
+    ws = wb.create_sheet("구분별 건수")
+    ws.append(["구분", "건수(묶음)", "기사 행", "온라인", "지면", "방송"])
+    subtypes = list(dict.fromkeys(["기고", "인터뷰", "기획보도"] + [g["subtype"] for g in groups]))
+    for s in subtypes:
+        mine = [g for g in groups if g["subtype"] == s]
+        ws.append([s, len(mine)] + [sum(g["counts"][k] for g in mine) for k in ("total", "online", "print", "broadcast")])
+    ws.append(["합계", len(groups)] + [sum(g["counts"][k] for g in groups) for k in ("total", "online", "print", "broadcast")])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+    style_header(ws, [12, 12, 10, 8, 8, 8])
+    return to_bytes(wb)
+
+
+# ---------------- 기사 DB 엑셀 (DB 편집 창, v1.5.0) ----------------
+
+DB_COLUMNS = [("seq", "연번", 8), ("date", "날짜", 13), ("press", "언론사명", 18), ("type", "구분", 12),
+              ("title", "제목", 70), ("url", "URL", 50), ("published_at", "게재일시", 22),
+              ("keywords", "키워드", 20), ("saved_at", "저장일시", 22), ("category", "분류", 12)]
+
+
+def build_db_rows(rows):
+    """기사 DB 행 그대로 (DB와 같은 열 순서)"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "기사 DB"
+    ws.append([h for _, h, _ in DB_COLUMNS])
+    for r in rows:
+        ws.append([r.get(n) if r.get(n) is not None else "" for n, _, _ in DB_COLUMNS])
+        url_cell = ws.cell(ws.max_row, 6)
+        if isinstance(url_cell.value, str) and url_cell.value.startswith(("http://", "https://")):
+            url_cell.hyperlink = url_cell.value
+            url_cell.style = "Hyperlink"
+    style_header(ws, [w for _, _, w in DB_COLUMNS])
+    if rows:
+        ws.auto_filter.ref = ws.dimensions
+    for row in ws.iter_rows(min_row=2):
+        for i in (0, 1, 3, 9):
+            row[i].alignment = Alignment(horizontal="center", vertical="center")
     return to_bytes(wb)
