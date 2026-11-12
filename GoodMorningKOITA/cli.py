@@ -21,6 +21,8 @@ GoodMorningKOITA 명령줄 실행 (화면 없이, AI 에이전트·예약 작업
       기사를 보도자료에 연결 (기사키 = 후보·미연결 목록의 key). 기사 하나는 보도자료 하나에만
   python cli.py press-release-unlink --key 기사키 [--key ...]
       연결 끊기
+  python cli.py press-release-export --what summary|articles --out 파일.xlsx [--folder 폴더] [--from ...] [--to ...]
+      보도자료 엑셀 저장. summary = 보도자료 목록+보도건수(총·온라인·지면·방송), articles = 보도자료에 연결된 기사 전체
 """
 
 import argparse
@@ -135,6 +137,16 @@ def press_release_unlink_cmd(args):
         return out({"ok": False, "error": str(exc)}, 1)
 
 
+def press_release_export_cmd(args):
+    import exporter
+    data = pressrelease.overview(args.folder, None, None, args.date_from, args.date_to)
+    build = exporter.build_release_summary if args.what == "summary" else exporter.build_release_articles
+    path = Path(args.out).resolve()
+    path.write_bytes(build(data["releases"]))
+    return out({"ok": True, "file": str(path), "releases": len(data["releases"]),
+                "linked": data["summary"]["linked"]}, 0)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="GoodMorningKOITA 명령줄 실행 (JSON 출력)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -168,6 +180,14 @@ def main(argv=None):
     p = sub.add_parser("press-release-unlink", help="보도자료 연결 끊기")
     p.add_argument("--key", action="append", required=True, help="기사키 (여러 번 가능)")
     p.set_defaults(run=press_release_unlink_cmd)
+    p = sub.add_parser("press-release-export", help="보도자료 엑셀 저장")
+    p.add_argument("--what", choices=["summary", "articles"], required=True,
+                   help="summary = 보도자료 목록+보도건수, articles = 연결된 기사 전체")
+    p.add_argument("--out", required=True, help="저장할 엑셀 파일 경로 (.xlsx)")
+    p.add_argument("--folder", help="보도자료 폴더 (기본: .env PRESSRELEASE_DIR)")
+    p.add_argument("--from", dest="date_from", help="배포일 시작 YYYY-MM-DD (포함)")
+    p.add_argument("--to", dest="date_to", help="배포일 끝 YYYY-MM-DD (포함)")
+    p.set_defaults(run=press_release_export_cmd)
     args = parser.parse_args(argv)
     try:
         return args.run(args)

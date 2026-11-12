@@ -30,6 +30,8 @@
   .panel h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; }
   .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
   .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cards.three { grid-template-columns: repeat(3, 1fr); }
+  .unlinked-note { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
   .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--panel); }
   .card .label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
   .card .num { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -57,7 +59,7 @@
   .error { background: #fee2e2; color: #b91c1c; border-radius: 6px; padding: 8px 12px; }
   @media (max-width: 860px) {
     .two { grid-template-columns: 1fr; }
-    .cards { grid-template-columns: repeat(2, 1fr); }
+    .cards, .cards.three { grid-template-columns: repeat(2, 1fr); }
     header, main { padding: 12px 16px; }
     td.bar-cell { width: 35%; }
   }
@@ -109,7 +111,13 @@
   <section class="panel">
     <h2>보도자료별 <small id="pr-info"></small><span class="legend" data-legend></span>
       <a href="/pressrelease" target="_blank" style="font-size:12px; font-weight:400; margin-left:8px">보도자료 창에서 연결하기 ↗</a></h2>
-    <div class="cards" id="pr-cards" style="margin-bottom:12px"></div>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btn-xlsx-summary" title="보도자료 목록과 보도자료별 보도건수(총·온라인·지면·방송)">📥 보도자료 목록·보도건수 엑셀</button>
+      <button id="btn-xlsx-articles" title="보도자료마다 연결된 기사 전체 (날짜·언론사·제목·URL)">📥 보도자료별 연결 기사 엑셀</button>
+      <span class="muted" style="font-size:12px">위 기간(배포일 기준)의 보도자료</span>
+    </div>
+    <div class="cards three" id="pr-cards" style="margin-bottom:12px"></div>
+    <div class="unlinked-note" id="pr-unlinked"></div>
     <div id="by-release" class="scroll"></div>
   </section>
 
@@ -144,6 +152,27 @@ function applyPreset() {
   else if (p === "last-year") set(`${y - 1}-01-01`, `${y - 1}-12-31`);
   else if (p === "this-month") set(iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)));
   else if (p === "12m") set(iso(new Date(y, m - 11, 1)), iso(new Date(y, m + 1, 0)));
+}
+
+// 보도자료 엑셀 내려받기. what: summary(보도자료 목록+보도건수) / articles(보도자료에 연결된 기사 전체)
+async function downloadReleaseXlsx(what, body, button) {
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch(`/api/press-releases/export/${what}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) throw new Error(await res.json().then(j => j.detail).catch(() => res.statusText));
+    const cd = res.headers.get("Content-Disposition") || "";
+    const name = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/) || [])[1] || `${what}.xlsx`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) {
+    alert(`엑셀을 만들지 못했습니다: ${err.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function bar(item, max) {
@@ -184,8 +213,10 @@ function renderReleases(pr) {
   $("pr-info").textContent = `배포일 기준 · 보도자료 ${fmt(m.releases)}건` + (pr.folder_error ? " · 보도자료 폴더를 못 읽어 연결해 둔 보도자료만" : "");
   const card = (label, num, sub) => `<div class="card"><div class="label">${label}</div><div class="num">${num}<small>건</small></div><div class="pct">${sub || "&nbsp;"}</div></div>`;
   $("pr-cards").innerHTML = card("보도자료", fmt(m.releases), `기사 0건 ${fmt(m.releases_without_articles)}`) +
-    card("연결된 기사", fmt(m.linked.total), `온라인 ${fmt(m.linked.online)} · 지면 ${fmt(m.linked.print)} · 방송 ${fmt(m.linked.broadcast)}`) +
-    card("보도자료 1건당 평균", m.average) + card("미연결 [보도자료] 기사", fmt(m.unlinked), "기사 날짜가 이 기간인 것");
+    card("보도자료 기반 언론보도", fmt(m.linked.total), `온라인 ${fmt(m.linked.online)} · 지면 ${fmt(m.linked.print)} · 방송 ${fmt(m.linked.broadcast)}`) +
+    card("보도자료 1건당 평균 보도건수", m.average);
+  // 미연결 기사는 카드 대신 작은 안내 (있을 때만, 기사 날짜가 이 기간인 것)
+  $("pr-unlinked").textContent = m.unlinked ? `*DB에서 연결되지 않은 [보도자료] 기사가 ${fmt(m.unlinked)}건 있습니다.` : "";
   const items = [...pr.by_release].sort((a, b) => b.total - a.total || (a.date < b.date ? 1 : -1))
     .map(x => ({ ...x, label: `${x.date} ${x.title}` }));
   $("by-release").innerHTML = table(items, "보도자료 (배포일 · 보도자료명)", "이 기간에 배포한 보도자료가 없습니다.");
@@ -226,6 +257,9 @@ document.querySelectorAll("[data-legend]").forEach(el => {
 $("preset").addEventListener("change", () => { applyPreset(); load(); });
 for (const id of ["date-from", "date-to"]) $(id).addEventListener("change", () => { $("preset").value = "range"; load(); });
 $("btn-refresh").addEventListener("click", load);
+const periodBody = () => ({ date_from: $("date-from").value || null, date_to: $("date-to").value || null });
+$("btn-xlsx-summary").addEventListener("click", (e) => downloadReleaseXlsx("summary", periodBody(), e.currentTarget));
+$("btn-xlsx-articles").addEventListener("click", (e) => downloadReleaseXlsx("articles", periodBody(), e.currentTarget));
 
 applyPreset();
 load();

@@ -136,6 +136,30 @@ def press_releases_post(body: PressReleaseQuery):
         return pressrelease.overview(body.folder, body.names, None, body.date_from or None, body.date_to or None)
 
 
+RELEASE_EXPORTS = {"summary": ("보도자료별_보도건수", exporter.build_release_summary),
+                   "articles": ("보도자료별_연결기사", exporter.build_release_articles)}
+
+
+def release_export(what, folder, names, date_from, date_to):
+    """보도자료 엑셀. what: summary(보도자료 목록+보도건수) / articles(보도자료에 연결된 기사 전체)"""
+    if what not in RELEASE_EXPORTS:
+        raise HTTPException(404, "summary 또는 articles만 됩니다.")
+    with archive_lock:
+        data = pressrelease.overview(folder, names, None, date_from or None, date_to or None)
+    name, build = RELEASE_EXPORTS[what]
+    return xlsx_response(None, build(data["releases"]), name)
+
+
+@app.get("/api/press-releases/export/{what}")
+def press_release_export(what: str, date_from: str | None = None, date_to: str | None = None, folder: str | None = None):
+    return release_export(what, folder, None, date_from, date_to)
+
+
+@app.post("/api/press-releases/export/{what}")
+def press_release_export_post(what: str, body: PressReleaseQuery):
+    return release_export(what, body.folder, body.names, body.date_from, body.date_to)
+
+
 class ReleaseRef(BaseModel):
     id: str | None = None
     date: str
@@ -304,9 +328,10 @@ def status():
 
 # ---------------- 창 모드: 프로그램 창이 모두 닫히면 서버도 끝낸다 ----------------
 
-WINDOW_MODE = False         # launcher.py(GoodMorningKOITA.vbs)로 켰을 때 True
+WINDOW_MODE = False         # launcher.py(GoodMorningKOITA.vbs)로 켰을 때 True (트레이 모드 포함)
 WINDOW_GRACE_SECONDS = 120  # 마지막 탭이 닫힌 뒤 이만큼 기다렸다 끈다 (절전에서 깨어남·탭 잠깐 끊김 대비, v1.4.0-rc.7 20→120초)
 FIRST_WINDOW_SECONDS = 180  # 켠 뒤 창이 한 번도 안 붙으면 이만큼 뒤에 끈다
+SERVER = None               # 돌고 있는 uvicorn 서버 (serve()에서 넣음)
 open_windows = 0
 open_windows_lock = threading.Lock()
 
@@ -320,9 +345,13 @@ async def alive(request: Request):
             open_windows += 1
         try:
             yield "retry: 2000\n\n"
-            while not await request.is_disconnected():
-                await asyncio.sleep(5)
-                yield ": ping\n\n"
+            tick = 0
+            # 트레이 [종료]로 서버가 끝날 때는 바로 연결을 끊는다 (종료를 기다리게 하지 않게)
+            while not (SERVER is not None and SERVER.should_exit) and not await request.is_disconnected():
+                await asyncio.sleep(1)
+                tick += 1
+                if tick % 5 == 0:
+                    yield ": ping\n\n"
         finally:
             with open_windows_lock:
                 open_windows -= 1
@@ -577,9 +606,9 @@ def export(days: int = 1, date_from: str | None = None, date_to: str | None = No
     return xlsx_response(db.list_articles(since, until))
 
 
-def xlsx_response(articles):
-    content = exporter.build_workbook(articles)
-    filename = f"산기협_뉴스_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+def xlsx_response(articles, content=None, name="산기협_뉴스"):
+    content = exporter.build_workbook(articles) if content is None else content
+    filename = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     return Response(
         content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -587,10 +616,13 @@ def xlsx_response(articles):
     )
 
 
-def serve(window_mode=False):
+def serve(window_mode=False, tray_mode=False, open_first=True):
     """
-    서버 실행. window_mode=True(launcher.py): 크롬에 프로그램 화면(탭)을 열고, 그 탭이 모두 닫히면 끝난다.
-    False(run.bat·클라우드): 예전처럼 CMD 창에서 돈다
+    서버 실행.
+    tray_mode=True(launcher.py, v1.5.0): 트레이 아이콘에 상주. 창을 닫아도 안 꺼지고, 트레이 [종료]로 끈다.
+        open_first=False면(Windows 시작 시 자동 실행) 창을 열지 않고 트레이에만 둔다
+    window_mode=True(트레이를 못 쓸 때): 크롬에 프로그램 화면(탭)을 열고, 그 탭이 모두 닫히면 끝난다.
+    둘 다 False(run.bat·클라우드): 예전처럼 CMD 창에서 돈다
     """
     global WINDOW_MODE
     import uvicorn
@@ -599,8 +631,34 @@ def serve(window_mode=False):
     host = os.getenv("HOST", "").strip() or "127.0.0.1"
     port = int(os.getenv("PORT", "").strip() or 8000)
     url = f"http://127.0.0.1:{port}"
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*"))
-    WINDOW_MODE = window_mode
+    # timeout_graceful_shutdown: 트레이 [종료] 때 열린 탭의 연결(/api/alive)을 5초 넘게 기다리지 않는다
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips="*",
+                                           timeout_graceful_shutdown=5))
+    global SERVER
+    SERVER = server
+    WINDOW_MODE = window_mode or tray_mode  # 화면에서 '프로그램이 꺼졌습니다' 안내를 띄우는 데 씀
+    if tray_mode:
+        import tray
+        import window
+
+        def run_server():
+            try:
+                server.run()
+            finally:
+                server._gm_stopped = True
+
+        thread = threading.Thread(target=run_server, name="server")
+        thread.start()
+        tray.sync_autostart()
+        if open_first:
+            threading.Timer(1.5, window.open_window, [url]).start()
+        log_path = Path(os.getenv("DATA_DIR", "").strip() or BASE_DIR) / "goodmorning.log"
+        tray.run(url, server, log_path,
+                 can_exit=lambda: not collect_lock.locked() and not archive_lock.locked(),
+                 open_window=window.open_window)
+        server.should_exit = True
+        thread.join(timeout=30)
+        return
     if window_mode:
         import window
         threading.Thread(target=watch_windows, args=(server,), daemon=True).start()

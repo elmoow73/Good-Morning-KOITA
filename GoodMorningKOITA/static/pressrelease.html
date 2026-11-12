@@ -35,7 +35,9 @@
   .panel h2 small { font-weight: 400; color: var(--muted); font-size: 12px; }
   .panel h3 .muted { font-weight: 400; }
   .panel h3 { font-size: 14px; margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .unlinked-note { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
+
   .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--panel); }
   .card .label { color: var(--muted); font-size: 13px; }
   .card .num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -97,6 +99,8 @@
     <button id="btn-refresh" title="보도자료 폴더와 기사 DB를 다시 읽기">새로 고침</button>
     <button id="btn-pick" title="폰·클라우드 서버에서 쓸 때: 보도자료 폴더를 직접 고르기">폴더 직접 고르기</button>
     <input type="file" id="picker" webkitdirectory multiple style="display:none">
+    <button id="btn-xlsx-summary" title="보도자료 목록과 보도자료별 보도건수(총·온라인·지면·방송)">📥 목록·보도건수 엑셀</button>
+    <button id="btn-xlsx-articles" title="보도자료마다 연결된 기사 전체 (날짜·언론사·제목·URL)">📥 연결 기사 엑셀</button>
     <a class="button" href="/analysis" target="_blank">DB 분석</a>
   </div>
   <span class="muted small" id="source-info"></span>
@@ -105,6 +109,7 @@
 <main>
   <div id="messages"></div>
   <section class="cards" id="cards"></section>
+  <div class="unlinked-note" id="unlinked-note"></div>
 
   <div class="tabs">
     <button class="active" data-tab="by-release">보도자료별</button>
@@ -172,6 +177,27 @@ function applyPreset() {
   else if (p === "this-month") set(iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)));
 }
 
+// 보도자료 엑셀 내려받기. what: summary(보도자료 목록+보도건수) / articles(보도자료에 연결된 기사 전체)
+async function downloadReleaseXlsx(what, body, button) {
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch(`/api/press-releases/export/${what}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) throw new Error(await res.json().then(j => j.detail).catch(() => res.statusText));
+    const cd = res.headers.get("Content-Disposition") || "";
+    const name = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/) || [])[1] || `${what}.xlsx`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) {
+    alert(`엑셀을 만들지 못했습니다: ${err.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function typeBadge(a) { return `<span class="badge ${a.kind}">${esc(a.type)}</span>`; }
 function urlLink(a) { return a.url && a.url.startsWith("http") ? ` <a class="ext" href="${esc(a.url)}" target="_blank" title="기사 열기">↗</a>` : ""; }
 function release(id) { return data.releases.find(r => r.id === id); }
@@ -194,11 +220,11 @@ async function load() {
   $("cards").innerHTML = `
     <div class="card"><div class="label">보도자료</div><div class="num">${fmt(s.releases)}<small>건</small></div>
       <div class="sub">기사 있음 ${fmt(s.releases_with_articles)} · 0건 ${fmt(s.releases_without_articles)}</div></div>
-    <div class="card"><div class="label">연결된 기사</div><div class="num">${fmt(s.linked.total)}<small>건</small></div>
+    <div class="card"><div class="label">보도자료 기반 언론보도</div><div class="num">${fmt(s.linked.total)}<small>건</small></div>
       <div class="sub">온라인 ${fmt(s.linked.online)} · 지면 ${fmt(s.linked.print)} · 방송 ${fmt(s.linked.broadcast)}</div></div>
-    <div class="card"><div class="label">보도자료 1건당 평균</div><div class="num">${s.average}<small>건</small></div><div class="sub">&nbsp;</div></div>
-    <div class="card"><div class="label">미연결 [보도자료] 기사</div><div class="num">${fmt(s.unlinked)}<small>건</small></div>
+    <div class="card"><div class="label">보도자료 1건당 평균 보도건수</div><div class="num">${s.average}<small>건</small></div>
       <div class="sub">${s.missing_articles ? `DB에서 사라진 연결 ${s.missing_articles}건` : "&nbsp;"}</div></div>`;
+  $("unlinked-note").textContent = s.unlinked ? `*DB에서 연결되지 않은 [보도자료] 기사가 ${fmt(s.unlinked)}건 있습니다. (아래 '미연결 [보도자료] 기사'에서 연결)` : "";
   $("unlinked-count").textContent = s.unlinked ? `(${s.unlinked})` : "";
   renderReleases();
   renderUnlinked();
@@ -365,6 +391,9 @@ $("preset").addEventListener("change", () => { applyPreset(); load(); });
 for (const id of ["date-from", "date-to"]) $(id).addEventListener("change", () => { $("preset").value = "range"; load(); });
 $("search").addEventListener("input", () => data && renderReleases());
 $("btn-refresh").addEventListener("click", load);
+const exportBody = () => ({ date_from: $("date-from").value || null, date_to: $("date-to").value || null, ...source });
+$("btn-xlsx-summary").addEventListener("click", (e) => downloadReleaseXlsx("summary", exportBody(), e.currentTarget));
+$("btn-xlsx-articles").addEventListener("click", (e) => downloadReleaseXlsx("articles", exportBody(), e.currentTarget));
 $("btn-pick").addEventListener("click", () => $("picker").click());
 $("picker").addEventListener("change", (e) => {
   const files = [...e.target.files];

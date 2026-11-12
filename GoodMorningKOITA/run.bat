@@ -1,5 +1,5 @@
 @echo off
-rem GoodMorningKOITA (CMD window / debug mode). Usual way: double-click GoodMorningKOITA.vbs (no CMD window).
+rem GoodMorningKOITA (CMD window / debug mode, no tray icon). Usual way: double-click GoodMorningKOITA.vbs (tray icon, no CMD window).
 rem run.bat --setup : only create .venv and install libraries (used by GoodMorningKOITA.vbs on first run)
 cd /d "%~dp0"
 if not exist .venv (
@@ -8,6 +8,7 @@ if not exist .venv (
 )
 echo [2/3] Checking libraries...
 .venv\Scripts\python -m pip install -q --disable-pip-version-check -r requirements.txt || goto :error
+copy /y requirements.txt .venv\requirements.installed.txt >nul
 if /i "%~1"=="--setup" (
     echo Setup done. Starting GoodMorningKOITA...
     exit /b 0
