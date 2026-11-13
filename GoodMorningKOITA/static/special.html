@@ -99,7 +99,7 @@
 <header>
   <h1>⭐ 특별보도 <small id="version" style="font-size:12px; color:var(--muted); font-weight:400"></small></h1>
   <div class="row">
-    <select id="preset" title="특별보도 날짜(묶음의 첫 기사 날짜) 기준 기간">
+    <select id="preset" title="특별보도 날짜(지면 기사 날짜, 없으면 첫 기사 날짜) 기준 기간">
       <option value="all">전체 기간</option>
       <option value="this-year" selected>올해</option>
       <option value="last-year">작년</option>
@@ -109,7 +109,8 @@
     <input type="date" id="date-from"> ~ <input type="date" id="date-to">
     <input type="search" id="search" placeholder="제목·언론사 찾기" style="width:180px">
     <button id="btn-refresh" title="기사 DB를 다시 읽기">새로 고침</button>
-    <button id="btn-xlsx" title="특별보도마다 묶인 기사 전체 + 구분별 건수">📥 특별보도 엑셀</button>
+    <button id="btn-xlsx-summary" title="특별보도 목록 (날짜·구분·특별보도명·언론사·기사 행 수) + 구분별 건수. 아래 '구분' 골라 보기를 따름">📥 목록 엑셀</button>
+    <button id="btn-xlsx-articles" title="특별보도 목록 + 묶인 기사 전체 (날짜·언론사·구분·제목·URL) + 구분별 건수. 아래 '구분' 골라 보기를 따름">📥 목록·연결 기사 엑셀</button>
     <a class="button" href="/analysis" target="_blank">DB 분석</a>
   </div>
 </header>
@@ -120,21 +121,22 @@
   <div class="unlinked-note" id="pending-note"></div>
 
   <div class="tabs">
-    <button class="active" data-tab="pending">묶기 대기 <span id="pending-count"></span></button>
-    <button data-tab="groups">등록된 특별보도 <span id="group-count"></span></button>
+    <button class="active" data-tab="groups">등록된 특별보도 <span id="group-count"></span></button>
+    <button data-tab="pending">묶기 대기 <span id="pending-count"></span></button>
   </div>
 
-  <section class="panel" data-pane="pending">
+
+  <section class="panel" data-pane="groups">
+    <h2>등록된 특별보도 <small id="groups-info"></small>
+      <select id="subtype-filter" style="margin-left:auto"><option value="">구분 전체</option></select></h2>
+    <div class="scroll" id="groups"></div>
+  </section>
+
+  <section class="panel" data-pane="pending" style="display:none">
     <h2>아직 묶지 않은 [특별보도] 기사 <small>같은 언론사 + 같은 날짜끼리 자동으로 묶어 보여 줍니다 (지면은 온라인 다음 날로 보고 맞춤)</small></h2>
     <p class="muted small" style="margin:-4px 0 12px">구분과 이름을 확인하고 [한 건으로 등록]을 누르세요. 다른 기사가 섞였으면 체크를 풀고 등록하면 남은 기사는 그대로 대기합니다.
       같은 특별보도가 따로 나뉘어 보이면 하나를 먼저 등록한 뒤, 다른 쪽에서 "기존 특별보도에 더하기"로 고르세요.</p>
     <div id="pending"></div>
-  </section>
-
-  <section class="panel" data-pane="groups" style="display:none">
-    <h2>등록된 특별보도 <small id="groups-info"></small>
-      <select id="subtype-filter" style="margin-left:auto"><option value="">구분 전체</option></select></h2>
-    <div class="scroll" id="groups"></div>
   </section>
 
   <p class="muted small" style="margin:0">특별보도는 묶음 1개를 1건으로 셉니다 (온라인+지면, 여러 꼭지로 나뉜 기사도 1건). 기사 하나는 특별보도 하나에만 묶입니다.
@@ -144,7 +146,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let data = null;
-let tab = "pending";
+let tab = "groups";
 let openId = null;
 
 function esc(s) {
@@ -225,6 +227,7 @@ function renderPending() {
           <option value="">새 특별보도로</option>
           ${same.map(g => `<option value="${esc(g.id)}">기존 특별보도에 더하기: ${esc(g.date)} [${esc(g.subtype)}] ${esc(g.title)}</option>`).join("")}
         </select>
+        <input type="date" data-date value="${esc(p.date)}" title="특별보도 날짜. 지면 기사가 있으면 지면 날짜가 기본 (고쳐도 됨)">
         <select data-subtype title="구분">${subtypeOptions(p.subtype)}</select>
         <input class="title" data-title value="${esc(p.title)}" title="특별보도 이름 (기본: 온라인 기사 제목)">
         <button class="primary" data-register>한 건으로 등록</button>
@@ -244,6 +247,7 @@ $("pending").addEventListener("change", (e) => {
     const isNew = !e.target.value;
     box.querySelector("[data-subtype]").disabled = !isNew;
     box.querySelector("[data-title]").disabled = !isNew;
+    box.querySelector("[data-date]").disabled = !isNew;
   }
 });
 
@@ -257,7 +261,8 @@ $("pending").addEventListener("click", async (e) => {
   btn.disabled = true;
   try {
     const r = await api("/api/special/group", target ? { keys, group_id: target } :
-      { keys, subtype: box.querySelector("[data-subtype]").value, title: box.querySelector("[data-title]").value });
+      { keys, subtype: box.querySelector("[data-subtype]").value, title: box.querySelector("[data-title]").value,
+        date: autoDate(box, keys) });
     await load();
     message(`${r.linked}행을 특별보도 1건으로 ${target ? "더했습니다" : "등록했습니다"}.`, "ok");
     r.warnings.forEach(w => message(esc(w)));
@@ -266,6 +271,12 @@ $("pending").addEventListener("click", async (e) => {
     message(esc(err.message), "error");
   }
 });
+
+// 제안의 기본 날짜를 그대로 두면 자동(지면 기준)으로 맡기고, 바꿨을 때만 직접 정한 날짜로 보낸다
+function autoDate(box, keys) {
+  const input = box.querySelector("[data-date]");
+  return input.value && input.value !== input.defaultValue ? input.value : null;
+}
 
 // ---------------- 등록된 특별보도 ----------------
 
@@ -277,7 +288,7 @@ function renderGroups() {
   $("groups").innerHTML = `<table><thead><tr><th>날짜</th><th>구분</th><th>언론사</th><th>특별보도명</th>
     <th class="num">기사 행</th><th class="num">온라인</th><th class="num">지면</th><th class="num">방송</th></tr></thead><tbody>` +
     list.map(g => `<tr class="g ${g.id === openId ? "open" : ""}" data-id="${esc(g.id)}">
-      <td class="nowrap">${esc(g.date)}</td><td>${subBadge(g.subtype)}</td><td class="nowrap">${esc(g.press)}</td>
+      <td class="nowrap">${esc(g.date)}${g.date_set ? ` <span class="badge" title="직접 고친 날짜">수정</span>` : ""}</td><td>${subBadge(g.subtype)}</td><td class="nowrap">${esc(g.press)}</td>
       <td>${esc(g.title)}${g.missing_articles.length ? ` <span class="badge warn">DB에서 사라진 기사 ${g.missing_articles.length}</span>` : ""}
         ${g.not_special ? ` <span class="badge warn" title="분류가 [특별보도]가 아닌 기사가 묶여 있음">분류 다름 ${g.not_special}</span>` : ""}</td>
       <td class="num"><b>${g.counts.total}</b></td><td class="num">${g.counts.online}</td><td class="num">${g.counts.print}</td><td class="num">${g.counts.broadcast}</td></tr>` +
@@ -291,9 +302,11 @@ function detailHtml(g) {
       <td class="nowrap">${esc(a.article_date)}</td><td class="nowrap">${esc(a.press)}</td><td><span class="badge warn">DB에서 사라짐</span> ${esc(a.title)}</td></tr>`).join("");
   return `<div class="detail" data-group="${esc(g.id)}">
     <div class="head">
+      <input type="date" data-date value="${esc(g.date)}" title="특별보도 날짜 (기본: 지면 기사 날짜, 없으면 첫 기사 날짜)">
       <select data-subtype>${subtypeOptions(g.subtype)}</select>
       <input class="title" data-title value="${esc(g.title)}">
-      <button data-save>구분·이름 저장</button>
+      <button data-save>날짜·구분·이름 저장</button>
+      ${g.date_set ? `<button data-auto-date title="직접 고친 날짜를 지우고 지면 기사 날짜(없으면 첫 기사 날짜)로">날짜 자동으로</button>` : ""}
       <button class="danger" data-ungroup title="이 특별보도를 풀어 기사들을 다시 '묶기 대기'로">묶음 풀기</button>
     </div>
     <table><thead><tr><th class="check"></th><th>날짜</th><th>언론사</th><th>제목</th></tr></thead><tbody>${rows}</tbody></table>
@@ -309,8 +322,14 @@ $("groups").addEventListener("click", async (e) => {
   try {
     let r = null;
     if (e.target.matches("[data-save]")) {
-      r = await api("/api/special/update", { group_id: id, subtype: box.querySelector("[data-subtype]").value, title: box.querySelector("[data-title]").value });
-      await load(); message("구분·이름을 저장했습니다.", "ok");
+      const g = data.groups.find(x => x.id === id);
+      const day = box.querySelector("[data-date]").value;
+      r = await api("/api/special/update", { group_id: id, subtype: box.querySelector("[data-subtype]").value,
+        title: box.querySelector("[data-title]").value, date: day && day !== g.date ? day : null });
+      await load(); message("날짜·구분·이름을 저장했습니다.", "ok");
+    } else if (e.target.matches("[data-auto-date]")) {
+      r = await api("/api/special/update", { group_id: id, date: "" });
+      await load(); message("날짜를 자동(지면 기사 날짜 기준)으로 되돌렸습니다.", "ok");
     } else if (e.target.matches("[data-ungroup]")) {
       if (!confirm("이 특별보도의 묶음을 풀까요? 기사는 기사 DB에 그대로 있고 '묶기 대기'로 돌아갑니다.")) return;
       r = await api("/api/special/unlink", { group_id: id });
@@ -337,7 +356,13 @@ for (const id of ["date-from", "date-to"]) $(id).addEventListener("change", () =
 $("search").addEventListener("input", () => { if (data) { renderPending(); renderGroups(); } });
 $("subtype-filter").addEventListener("change", renderGroups);
 $("btn-refresh").addEventListener("click", load);
-$("btn-xlsx").addEventListener("click", () => { location.href = `/api/special/export?${query()}`; });
+function exportUrl(what) {
+  const q = query();
+  if ($("subtype-filter").value) q.set("subtype", $("subtype-filter").value);
+  return `/api/special/export/${what}?${q}`;
+}
+$("btn-xlsx-summary").addEventListener("click", () => { location.href = exportUrl("summary"); });
+$("btn-xlsx-articles").addEventListener("click", () => { location.href = exportUrl("articles"); });
 
 applyPreset();
 load();

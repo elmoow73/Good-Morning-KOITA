@@ -131,7 +131,8 @@
     <h2>특별보도 <small id="sp-info"></small>
       <a href="/special" target="_blank" style="font-size:12px; font-weight:400; margin-left:auto">특별보도 창에서 묶기 ↗</a></h2>
     <div class="row" style="margin-bottom:12px">
-      <button id="btn-xlsx-special" title="특별보도마다 묶인 기사 전체 + 구분별 건수">📥 특별보도 엑셀</button>
+      <button id="btn-xlsx-special-summary" title="특별보도 목록 + 구분별 건수 (옆 '구분' 골라 보기를 따름)">📥 특별보도 목록 엑셀</button>
+      <button id="btn-xlsx-special" title="특별보도 목록 + 묶인 기사 전체 + 구분별 건수 (옆 '구분' 골라 보기를 따름)">📥 특별보도 목록·연결 기사 엑셀</button>
       <select id="sp-filter" title="구분으로 골라 보기"><option value="">구분 전체</option></select>
     </div>
     <div class="cards" id="sp-cards" style="margin-bottom:12px"></div>
@@ -247,7 +248,7 @@ function renderSpecial(sp) {
   if (!special) { $("sp-list").innerHTML = ""; return; }
   const m = special.summary;
   if (!$("sp-filter").options[1]) $("sp-filter").insertAdjacentHTML("beforeend", special.subtypes.map(t => `<option>${esc(t)}</option>`).join(""));
-  $("sp-info").textContent = `묶음 1개 = 1건 · 특별보도 날짜(첫 기사 날짜) 기준`;
+  $("sp-info").textContent = `묶음 1개 = 1건 · 특별보도 날짜(지면 기사 날짜, 없으면 첫 기사 날짜) 기준`;
   const card = (label, num, sub) => `<div class="card"><div class="label">${label}</div><div class="num">${num}<small>건</small></div><div class="pct">${sub}</div></div>`;
   $("sp-cards").innerHTML = card("특별보도", fmt(m.total), `기사 ${fmt(m.rows.total)}행 (온라인 ${fmt(m.rows.online)} · 지면 ${fmt(m.rows.print)} · 방송 ${fmt(m.rows.broadcast)})`) +
     special.subtypes.map(t => card(`<span class="sub-badge ${esc(t)}">${esc(t)}</span>`, fmt(m.by_subtype[t].count), `기사 ${fmt(m.by_subtype[t].rows.total)}행`)).join("");
@@ -301,10 +302,13 @@ const periodBody = () => ({ date_from: $("date-from").value || null, date_to: $(
 $("btn-xlsx-summary").addEventListener("click", (e) => downloadReleaseXlsx("summary", periodBody(), e.currentTarget));
 $("btn-xlsx-articles").addEventListener("click", (e) => downloadReleaseXlsx("articles", periodBody(), e.currentTarget));
 $("sp-filter").addEventListener("change", () => renderSpecial());
-$("btn-xlsx-special").addEventListener("click", () => {
+function specialExport(what) {
   const q = new URLSearchParams(Object.entries(periodBody()).filter(([, v]) => v));
-  location.href = `/api/special/export?${q}`;
-});
+  if ($("sp-filter").value) q.set("subtype", $("sp-filter").value);
+  location.href = `/api/special/export/${what}?${q}`;
+}
+$("btn-xlsx-special-summary").addEventListener("click", () => specialExport("summary"));
+$("btn-xlsx-special").addEventListener("click", () => specialExport("articles"));
 
 applyPreset();
 load();

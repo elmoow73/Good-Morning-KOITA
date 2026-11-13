@@ -208,20 +208,20 @@ def grouped_articles_workbook(title, left_columns, left_widths, groups, text_col
 
 # ---------------- 특별보도 엑셀 (v1.5.0) ----------------
 
-SPECIAL_COLUMNS = ["날짜", "구분", "특별보도명", "기사 행", "온라인", "지면", "방송"]
-SPECIAL_WIDTHS = [13, 10, 60, 8, 7, 7, 7]
+SPECIAL_COLUMNS = ["날짜", "구분", "특별보도명", "언론사", "기사 행", "온라인", "지면", "방송"]
+SPECIAL_WIDTHS = [13, 10, 60, 16, 8, 7, 7, 7]
 
 
-def build_special(groups):
-    """특별보도 묶음 1건마다 묶인 기사 전체 (특별보도 칸은 세로로 합침). 맨 아래 구분별 건수는 별도 시트"""
-    data = grouped_articles_workbook(
-        "특별보도", SPECIAL_COLUMNS, SPECIAL_WIDTHS,
-        [([g["date"], g["subtype"], g["title"], g["counts"]["total"], g["counts"]["online"],
-           g["counts"]["print"], g["counts"]["broadcast"]], g["articles"]) for g in groups], text_col=3)
-    from openpyxl import load_workbook
-    wb = load_workbook(BytesIO(data))
-    ws = wb.create_sheet("구분별 건수")
-    ws.append(["구분", "건수(묶음)", "기사 행", "온라인", "지면", "방송"])
+def special_values(g):
+    return [g["date"], g["subtype"], g["title"], g["press"], g["counts"]["total"], g["counts"]["online"],
+            g["counts"]["print"], g["counts"]["broadcast"]]
+
+
+def subtype_sheet(wb, groups, title):
+    """구분(기고·인터뷰·기획보도)별 특별보도 건수와 기사 행 수"""
+    ws = wb.create_sheet(title) if wb.active.max_row > 1 else wb.active
+    ws.title = title
+    ws.append(["구분", "특별보도(건)", "기사 행", "온라인", "지면", "방송"])
     subtypes = list(dict.fromkeys(["기고", "인터뷰", "기획보도"] + [g["subtype"] for g in groups]))
     for s in subtypes:
         mine = [g for g in groups if g["subtype"] == s]
@@ -229,7 +229,43 @@ def build_special(groups):
     ws.append(["합계", len(groups)] + [sum(g["counts"][k] for g in groups) for k in ("total", "online", "print", "broadcast")])
     for cell in ws[ws.max_row]:
         cell.font = Font(bold=True)
-    style_header(ws, [12, 12, 10, 8, 8, 8])
+    style_header(ws, [12, 13, 10, 8, 8, 8])
+    for row in ws.iter_rows(min_row=2):
+        for cell in row[1:]:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def build_special_summary(groups):
+    """특별보도 엑셀 1: 목록 (날짜·구분·특별보도명·언론사·기사 행 수) + 맨 아래 합계 + 구분별 건수 시트"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "특별보도 목록"
+    ws.append(SPECIAL_COLUMNS)
+    for g in groups:
+        ws.append(special_values(g))
+    last = ws.max_row
+    if groups:
+        ws.auto_filter.ref = f"A1:H{last}"
+        ws.append([])
+        ws.append(["합계", "", f"특별보도 {len(groups)}건", ""] +
+                  [sum(g["counts"][k] for g in groups) for k in ("total", "online", "print", "broadcast")])
+        for cell in ws[ws.max_row]:
+            cell.font = Font(bold=True)
+    style_header(ws, SPECIAL_WIDTHS)
+    for row in ws.iter_rows(min_row=2):
+        for i in (0, 1, 4, 5, 6, 7):
+            row[i].alignment = Alignment(horizontal="center", vertical="center")
+    subtype_sheet(wb, groups, "구분별 건수")
+    return to_bytes(wb)
+
+
+def build_special(groups):
+    """특별보도 엑셀 2: 목록 + 특별보도마다 묶인 기사 전체 (특별보도 칸은 세로로 합침) + 구분별 건수 시트"""
+    from openpyxl import load_workbook
+    data = grouped_articles_workbook("특별보도별 연결 기사", SPECIAL_COLUMNS, SPECIAL_WIDTHS,
+                                     [(special_values(g), g["articles"]) for g in groups], text_col=3)
+    wb = load_workbook(BytesIO(data))
+    subtype_sheet(wb, groups, "구분별 건수")
     return to_bytes(wb)
 
 

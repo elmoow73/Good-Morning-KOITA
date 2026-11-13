@@ -28,10 +28,12 @@ GoodMorningKOITA 명령줄 실행 (화면 없이, AI 에이전트·예약 작업
       종료 코드 1 = 안 묶은 [특별보도] 기사가 있음
   python cli.py special-group --key 기사키 [--key ...] (--subtype 기고|인터뷰|기획보도 [--title 이름] | --group 특별보도ID)
       기사들을 특별보도 1건으로 묶기 (--group: 기존 특별보도에 더하기)
+  python cli.py special-update --group 특별보도ID [--subtype 구분] [--title 이름] [--date YYYY-MM-DD | --date ""]
+      특별보도 구분·이름·날짜 고치기 (--date "": 자동 날짜(지면 기사 날짜 → 없으면 첫 기사 날짜)로 되돌림)
   python cli.py special-unlink (--key 기사키 [--key ...] | --group 특별보도ID)
       묶음에서 기사 빼기 / 특별보도 통째로 풀기
-  python cli.py special-export --out 파일.xlsx [--from ...] [--to ...]
-      특별보도 엑셀 저장 (특별보도마다 묶인 기사 전체 + 구분별 건수 시트)
+  python cli.py special-export --what summary|articles --out 파일.xlsx [--from ...] [--to ...]
+      특별보도 엑셀 저장. summary = 목록+건수, articles = 목록+묶인 기사 전체 (둘 다 구분별 건수 시트 포함)
 """
 
 import argparse
@@ -165,7 +167,14 @@ def special_cmd(args):
 
 def special_group_cmd(args):
     try:
-        return out({"ok": True} | special.group(args.key, args.subtype, args.title, args.group), 0)
+        return out({"ok": True} | special.group(args.key, args.subtype, args.title, args.group, day=args.date), 0)
+    except special.SpecialError as exc:
+        return out({"ok": False, "error": str(exc)}, 1)
+
+
+def special_update_cmd(args):
+    try:
+        return out({"ok": True} | special.update(args.group, args.subtype, args.title, day=args.date), 0)
     except special.SpecialError as exc:
         return out({"ok": False, "error": str(exc)}, 1)
 
@@ -181,7 +190,8 @@ def special_export_cmd(args):
     import exporter
     data = special.overview(None, args.date_from, args.date_to)
     path = Path(args.out).resolve()
-    path.write_bytes(exporter.build_special(data["groups"]))
+    build = exporter.build_special_summary if args.what == "summary" else exporter.build_special
+    path.write_bytes(build(data["groups"]))
     return out({"ok": True, "file": str(path), "groups": len(data["groups"]), "summary": data["summary"]}, 0)
 
 
@@ -235,12 +245,21 @@ def main(argv=None):
     p.add_argument("--subtype", choices=special.SUBTYPES, help="구분 (새로 묶을 때)")
     p.add_argument("--title", help="특별보도 이름 (비우면 온라인 기사 제목)")
     p.add_argument("--group", help="기존 특별보도ID에 더하기")
+    p.add_argument("--date", help="특별보도 날짜 직접 정하기 YYYY-MM-DD (비우면 지면 기사 날짜 → 없으면 첫 기사 날짜)")
     p.set_defaults(run=special_group_cmd)
+    p = sub.add_parser("special-update", help="특별보도 구분·이름·날짜 고치기")
+    p.add_argument("--group", required=True, help="특별보도ID")
+    p.add_argument("--subtype", choices=special.SUBTYPES, help="구분")
+    p.add_argument("--title", help="특별보도 이름")
+    p.add_argument("--date", help='특별보도 날짜 YYYY-MM-DD ("" = 자동으로 되돌림)')
+    p.set_defaults(run=special_update_cmd)
     p = sub.add_parser("special-unlink", help="특별보도 묶음에서 빼기·풀기")
     p.add_argument("--key", action="append", help="기사키 (여러 번 가능)")
     p.add_argument("--group", help="이 특별보도ID를 통째로 풀기")
     p.set_defaults(run=special_unlink_cmd)
     p = sub.add_parser("special-export", help="특별보도 엑셀 저장")
+    p.add_argument("--what", choices=["summary", "articles"], default="articles",
+                   help="summary = 목록+건수, articles = 목록+묶인 기사 전체 (기본)")
     p.add_argument("--out", required=True, help="저장할 엑셀 파일 경로 (.xlsx)")
     p.add_argument("--from", dest="date_from", help="시작 날짜 YYYY-MM-DD (포함)")
     p.add_argument("--to", dest="date_to", help="끝 날짜 YYYY-MM-DD (포함)")

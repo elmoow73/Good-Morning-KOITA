@@ -139,15 +139,18 @@ docker run -d --restart unless-stopped -p 8000:8000 -v koita-data:/data --env-fi
 
 - **묶음 1개 = 1건**입니다. 온라인+지면으로 나간 칼럼도, 여러 꼭지(예: 2꼭지 × 온라인·지면 = 4행)로 나간 기획기사도 1건입니다
 - **묶기 대기** 탭: 아직 안 묶은 [특별보도] 기사를 같은 언론사 + 같은 날짜끼리 자동으로 묶어 보여 줍니다(지면 행은 하루 앞 날짜로 맞춤). 구분·이름을 확인하고 [한 건으로 등록]. 섞인 기사는 체크를 풀면 대기로 남고, 나뉘어 보이는 것은 "기존 특별보도에 더하기"로 합칩니다
-- **등록된 특별보도** 탭: 구분·이름 바꾸기, 기사 빼기, 묶음 풀기
+- **등록된 특별보도** 탭(창을 열면 먼저 보임): 날짜·구분·이름 바꾸기, 기사 빼기, 묶음 풀기
+- **특별보도 날짜**: 지면 기사가 있으면 가장 이른 지면 날짜, 없으면 첫 기사 날짜. 직접 고칠 수 있고(목록에 "수정" 표시), [날짜 자동으로]로 되돌립니다
+- 엑셀: [목록 엑셀]·[목록·연결 기사 엑셀] (구분 골라 보기를 따름, "구분별 건수" 시트 포함)
 - 묶음은 기사 DB 폴더의 `koita_special_연도.sqlite`(원본)·`.csv`·`.json`에 저장되고 `ARCHIVE_COPY_DIR`에도 복사됩니다. 기사 DB는 바뀌지 않습니다
 - DB 분석 창 맨 아래 "특별보도"에 구분별 건수와 목록, 엑셀
 
 ```
 python cli.py special [--from 2026-01-01] [--to 2026-12-31]        # 목록·구분별 건수·묶음 제안 (종료 코드 1 = 안 묶은 기사 있음)
 python cli.py special-group --key 기사키 [--key ...] --subtype 기고|인터뷰|기획보도 [--title 이름]   # 묶기 (--group ID: 기존에 더하기)
+python cli.py special-update --group 특별보도ID [--subtype ..] [--title ..] [--date 2026-11-10 | --date ""]   # 고치기 ("" = 날짜 자동)
 python cli.py special-unlink --key 기사키 | --group 특별보도ID         # 빼기·풀기
-python cli.py special-export --out 특별보도.xlsx                        # 엑셀
+python cli.py special-export --what summary|articles --out 특별보도.xlsx   # 엑셀 (목록 / 목록+연결 기사)
 ```
 
 ## 보도자료별 기사 건수 (v1.5.0~)

@@ -257,6 +257,7 @@ class SpecialGroup(BaseModel):
     subtype: str | None = None      # 기고·인터뷰·기획보도 (새로 묶을 때)
     title: str | None = None        # 특별보도 이름 (비우면 온라인 기사 제목)
     group_id: str | None = None     # 주면 그 특별보도에 더한다
+    date: str | None = None         # 특별보도 날짜 직접 정하기 (비우면 지면 기사 날짜 → 없으면 첫 기사 날짜)
 
 
 @app.post("/api/special/group")
@@ -264,7 +265,7 @@ def special_group(body: SpecialGroup):
     """체크한 기사들을 특별보도 1건으로 묶는다 (또는 기존 특별보도에 더한다)"""
     with archive_lock:
         try:
-            return special.group(body.keys, body.subtype, body.title, body.group_id)
+            return special.group(body.keys, body.subtype, body.title, body.group_id, day=body.date)
         except special.SpecialError as exc:
             raise HTTPException(409, str(exc))
 
@@ -273,13 +274,14 @@ class SpecialUpdate(BaseModel):
     group_id: str
     subtype: str | None = None
     title: str | None = None
+    date: str | None = None         # "" = 자동 날짜로 되돌림
 
 
 @app.post("/api/special/update")
 def special_update(body: SpecialUpdate):
     with archive_lock:
         try:
-            return special.update(body.group_id, body.subtype, body.title)
+            return special.update(body.group_id, body.subtype, body.title, day=body.date)
         except special.SpecialError as exc:
             raise HTTPException(400, str(exc))
 
@@ -298,12 +300,20 @@ def special_unlink(body: SpecialUnlink):
             raise HTTPException(400, str(exc))
 
 
-@app.get("/api/special/export")
-def special_export(date_from: str | None = None, date_to: str | None = None):
-    """특별보도 엑셀 (특별보도마다 묶인 기사 전체 + 구분별 건수 시트)"""
+SPECIAL_EXPORTS = {"summary": ("특별보도_목록", lambda g: exporter.build_special_summary(g)),
+                   "articles": ("특별보도_연결기사", lambda g: exporter.build_special(g))}
+
+
+@app.get("/api/special/export/{what}")
+def special_export(what: str, date_from: str | None = None, date_to: str | None = None, subtype: str | None = None):
+    """특별보도 엑셀. what: summary(목록+건수) / articles(목록+묶인 기사 전체). subtype: 기고·인터뷰·기획보도만"""
+    if what not in SPECIAL_EXPORTS:
+        raise HTTPException(404, "summary 또는 articles만 됩니다.")
     with archive_lock:
         data = special.overview(None, date_from or None, date_to or None)
-    return xlsx_response(None, exporter.build_special(data["groups"]), "특별보도")
+    groups = [g for g in data["groups"] if not subtype or g["subtype"] == subtype]
+    name, build = SPECIAL_EXPORTS[what]
+    return xlsx_response(None, build(groups), name)
 
 
 class DbRows(BaseModel):

@@ -2,7 +2,9 @@
 특별보도 묶음 (v1.5.0)
 
 기사 DB에서 분류가 [특별보도]인 행을 '특별보도 1건'으로 묶어 기고·인터뷰·기획보도로 나눈다.
-기사 DB 열은 그대로 두고, 보도자료처럼 따로 '특별보도 연결표'에 저장한다. 연도는 특별보도 날짜(묶음의 가장 이른 기사 날짜) 기준:
+기사 DB 열은 그대로 두고, 보도자료처럼 따로 '특별보도 연결표'에 저장한다. 연도는 특별보도 날짜 기준.
+특별보도 날짜: 묶음에 지면 기사가 있으면 가장 이른 지면 날짜, 없으면 가장 이른 기사 날짜 (v1.5.0-rc.4).
+특별보도 창에서 직접 고칠 수 있고, 고친 날짜(date_set = "1")는 기사를 더하거나 빼도 그대로 둔다:
 - koita_special_2026.sqlite : 원본 (한 줄 = 특별보도 1건 ↔ 기사 DB 1행)
 - koita_special_2026.csv / .json : 바뀔 때마다 다시 만드는 사본. ARCHIVE_COPY_DIR(드롭박스)에도 복사
 기사 하나(DB 1행)는 특별보도 하나에만 묶인다.
@@ -34,6 +36,7 @@ COLUMNS = [
     ("seq", "연번"),
     ("group_id", "특별보도ID"),
     ("group_date", "특별보도날짜"),
+    ("date_set", "날짜직접수정"),
     ("subtype", "구분"),
     ("group_title", "특별보도명"),
     ("article_date", "기사날짜"),
@@ -50,6 +53,7 @@ CREATE TABLE IF NOT EXISTS links (
     seq            INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id       TEXT NOT NULL,
     group_date     TEXT NOT NULL,
+    date_set       TEXT NOT NULL DEFAULT '',
     subtype        TEXT NOT NULL,
     group_title    TEXT NOT NULL,
     article_date   TEXT NOT NULL,
@@ -97,6 +101,8 @@ def connect(year):
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        if "date_set" not in {r[1] for r in conn.execute("PRAGMA table_info(links)")}:  # rc.3에서 만든 연결표
+            conn.execute("ALTER TABLE links ADD COLUMN date_set TEXT NOT NULL DEFAULT ''")
         yield conn
         conn.commit()
     finally:
@@ -132,14 +138,26 @@ def plain(links):
     return [{k: v for k, v in l.items() if k != "article"} for l in links]
 
 
+def auto_date(links):
+    """특별보도 날짜 기본값: 지면 기사가 있으면 가장 이른 지면 날짜, 없으면 가장 이른 기사 날짜"""
+    prints = [l["article_date"] for l in links if archive.is_print(l["type"])]
+    return min(prints or [l["article_date"] for l in links])
+
+
 def save_all(links, touched_years=()):
-    """links(모든 연도)를 특별보도 날짜의 연도별로 나눠 저장한다. 묶음 날짜는 묶음의 가장 이른 기사 날짜로 맞춘다"""
-    first = {}
+    """
+    links(모든 연도)를 특별보도 날짜의 연도별로 나눠 저장한다.
+    직접 고친 날짜(date_set = "1")는 그대로, 아니면 auto_date로 맞춘다
+    """
+    by_group = {}
     for l in links:
-        if l["group_id"] not in first or l["article_date"] < first[l["group_id"]]:
-            first[l["group_id"]] = l["article_date"]
-    for l in links:
-        l["group_date"] = first[l["group_id"]]
+        l.setdefault("date_set", "")
+        by_group.setdefault(l["group_id"], []).append(l)
+    for members in by_group.values():
+        fixed = next((l for l in members if l["date_set"] == "1"), None)
+        day = fixed["group_date"] if fixed else auto_date(members)
+        for l in members:
+            l["group_date"], l["date_set"] = day, "1" if fixed else ""
     by_year, before = {}, {}
     for l in links:
         by_year.setdefault(year_of(l["group_date"]), []).append(l)
@@ -200,7 +218,9 @@ def proposals(rows, linked_keys, date_from=None, date_to=None):
     out = []
     for (_, day), articles in groups.items():
         articles.sort(key=lambda a: (a["date"], {"online": 0, "broadcast": 1, "print": 2}[a["kind"]], a["title"]))
-        out.append({"key": f"{articles[0]['press']}|{day}", "date": day, "press": articles[0]["press"],
+        prints = [a["date"] for a in articles if a["kind"] == "print"]
+        out.append({"key": f"{articles[0]['press']}|{day}", "date": min(prints) if prints else day,
+                    "press": articles[0]["press"],
                     "articles": articles, "counts": pressrelease.counts(articles),
                     "subtype": guess_subtype([a["title"] for a in articles]), "title": default_title(articles)})
     out.sort(key=lambda g: (g["date"], g["press"]), reverse=True)
@@ -224,6 +244,7 @@ def overview(rows=None, date_from=None, date_to=None):
     groups = {}
     for link in links:
         g = groups.setdefault(link["group_id"], {"id": link["group_id"], "date": link["group_date"],
+                                                 "date_set": link.get("date_set") == "1",
                                                  "subtype": link["subtype"], "title": link["group_title"],
                                                  "articles": [], "missing_articles": []})
         if link["article"] is None:
@@ -285,12 +306,25 @@ def check_subtype(subtype):
         raise SpecialError(f"구분은 {'·'.join(SUBTYPES)} 중 하나여야 합니다.")
 
 
-def group(keys, subtype=None, title=None, group_id=None, rows=None):
+def check_date(day):
+    """직접 넣은 날짜 (YYYY-MM-DD). 비우면 None (자동)"""
+    day = (day or "").strip()
+    if not day:
+        return None
+    try:
+        return date.fromisoformat(day).isoformat()
+    except ValueError:
+        raise SpecialError("날짜는 2026-11-09 형식이어야 합니다.")
+
+
+def group(keys, subtype=None, title=None, group_id=None, rows=None, day=None):
     """
-    기사 DB 행들(keys = row_key)을 특별보도 1건으로 묶는다. group_id를 주면 그 특별보도에 더한다(구분·이름은 그대로).
+    기사 DB 행들(keys = row_key)을 특별보도 1건으로 묶는다. group_id를 주면 그 특별보도에 더한다(구분·이름·날짜는 그대로).
+    day: 특별보도 날짜를 직접 정할 때 (비우면 지면 기사 날짜 → 없으면 첫 기사 날짜)
     다른 특별보도에 이미 묶인 행이 있으면 SpecialError. 반환: {"group_id", "linked", "already", "warnings"}
     """
     rows = archive.all_rows() if rows is None else rows
+    day = check_date(day)
     keys = list(dict.fromkeys(keys or []))
     if not keys:
         raise SpecialError("묶을 기사를 고르세요.")
@@ -323,16 +357,26 @@ def group(keys, subtype=None, title=None, group_id=None, rows=None):
     if not title:
         title = default_title([pressrelease.article_view(r) for r in new]) if new else ""
     linked_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    out = plain(links) + [{"group_id": group_id, "group_date": r["date"], "subtype": subtype, "group_title": title,
-                           "linked_at": linked_at} | pressrelease.snapshot(r) for r in new]
+    fixed = {"group_date": day, "date_set": "1"} if day and not existing_group(links, group_id) else {}
+    out = plain(links) + [{"group_id": group_id, "group_date": r["date"], "date_set": "", "subtype": subtype,
+                           "group_title": title, "linked_at": linked_at} | pressrelease.snapshot(r) | fixed for r in new]
     touched = {year_of(l["group_date"]) for l in out if l["group_id"] == group_id}
     warnings = save_all(out, touched_years=touched if new else ())
     return {"group_id": group_id, "linked": len(new), "already": already, "warnings": warnings}
 
 
-def update(group_id, subtype=None, title=None, rows=None):
-    """특별보도 1건의 구분·이름을 바꾼다"""
+def existing_group(links, group_id):
+    return any(l["group_id"] == group_id for l in links)
+
+
+def update(group_id, subtype=None, title=None, rows=None, day=None):
+    """
+    특별보도 1건의 구분·이름·날짜를 바꾼다.
+    day: None = 그대로, "" = 자동(지면 기사 날짜 → 없으면 첫 기사 날짜)으로 되돌림, "2026-11-10" = 직접 정함
+    """
     rows = archive.all_rows() if rows is None else rows
+    reset = day is not None and not day.strip()
+    day = check_date(day)
     if subtype is not None:
         check_subtype(subtype)
     title = re.sub(r"\s+", " ", title).strip() if title is not None else None
@@ -348,7 +392,12 @@ def update(group_id, subtype=None, title=None, rows=None):
             l["subtype"] = subtype
         if title is not None:
             l["group_title"] = title
-    warnings = save_all(out, touched_years={year_of(found[0]["group_date"])})
+        if day:
+            l["group_date"], l["date_set"] = day, "1"
+        elif reset:
+            l["date_set"] = ""
+    old_year = year_of(found[0]["group_date"])
+    warnings = save_all(out, touched_years={old_year, year_of(found[0]["group_date"])})
     return {"updated": len(found), "warnings": warnings}
 
 
